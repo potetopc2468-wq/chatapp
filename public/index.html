@@ -9,70 +9,115 @@
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
-  <div id="lobby-screen" class="overlay">
-    <div class="lobby-box">
-      <h2>チャットルーム選択</h2>
-      <div class="input-group">
-        <label>ニックネーム</label>
-        <input type="text" id="username-input" placeholder="名前を入力..." maxlength="15">
-      </div>
-      <div class="input-group">
-        <label>新しくルームを作る</label>
-        <div class="create-room">
-          <input type="text" id="new-room-input" placeholder="ルーム名..." maxlength="15">
-          <button id="create-btn">作成</button>
+  <!-- メインコンテナ -->
+  <div id="app">
+    <!-- 各タブの画面 -->
+    <main id="main-content">
+      <!-- メインタブ (Generalチャット) -->
+      <section id="tab-main" class="tab-panel active">
+        <header>
+          <h1><i class="fas fa-globe"></i> メインチャット</h1>
+          <div class="header-voice-ui">
+            <div id="voice-participants"></div>
+            <div class="voice-buttons">
+              <button id="join-voice-btn" class="voice-btn" title="ボイスチャットに参加"><i class="fas fa-phone"></i></button>
+              <button id="mic-toggle-btn" class="voice-btn muted" style="display: none;" title="ミュート"><i class="fas fa-microphone-slash"></i></button>
+            </div>
+          </div>
+        </header>
+        <div id="messages-main" class="message-area"></div>
+        <form class="chat-input-form" data-target="main">
+          <input type="text" placeholder="メッセージを入力..." autocomplete="off">
+          <button type="submit"><i class="fas fa-paper-plane"></i></button>
+        </form>
+      </section>
+
+      <!-- グループタブ -->
+      <section id="tab-group" class="tab-panel">
+        <header>
+          <h1><i class="fas fa-users"></i> グループ</h1>
+          <button id="open-create-room" class="icon-btn"><i class="fas fa-plus"></i></button>
+        </header>
+        <div id="group-list" class="list-area"></div>
+      </section>
+
+      <!-- 個人チャットタブ -->
+      <section id="tab-private" class="tab-panel">
+        <header>
+          <h1><i class="fas fa-user-friends"></i> 個人チャット</h1>
+        </header>
+        <div id="private-chat-list" class="list-area"></div>
+      </section>
+
+      <!-- プロフィールタブ -->
+      <section id="tab-profile" class="tab-panel">
+        <header>
+          <h1><i class="fas fa-id-card"></i> プロフィール</h1>
+        </header>
+        <div class="profile-edit-area">
+          <div class="avatar-edit">
+            <img id="profile-avatar-preview" src="" alt="Avatar">
+            <button id="change-avatar-btn">アイコンを変更</button>
+          </div>
+          <div class="input-group">
+            <label>名前</label>
+            <input type="text" id="profile-name-input">
+          </div>
+          <div class="input-group">
+            <label>自己紹介</label>
+            <textarea id="profile-bio-input"></textarea>
+          </div>
+          <button id="save-profile-btn" class="primary-btn">保存する</button>
         </div>
-      </div>
-      <div class="room-list-container">
-        <label>公開ルーム一覧</label>
-        <ul id="room-list">
-          <li class="loading">ルームを探しています...</li>
-        </ul>
+      </section>
+    </main>
+
+    <!-- ボトムナビゲーション -->
+    <nav id="bottom-nav">
+      <button class="nav-item active" data-tab="main">
+        <i class="fas fa-comments"></i>
+        <span>メイン</span>
+      </button>
+      <button class="nav-item" data-tab="group">
+        <i class="fas fa-layer-group"></i>
+        <span>グループ</span>
+      </button>
+      <button class="nav-item" data-tab="private">
+        <i class="fas fa-comment-dots"></i>
+        <span>個人</span>
+      </button>
+      <button class="nav-item" data-tab="profile">
+        <i class="fas fa-user-circle"></i>
+        <span>設定</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- ルーム作成モーダル -->
+  <div id="create-room-modal" class="modal">
+    <div class="modal-content">
+      <h2>新規グループ作成</h2>
+      <input type="text" id="new-room-name" placeholder="グループ名を入力...">
+      <div class="modal-buttons">
+        <button id="close-modal">キャンセル</button>
+        <button id="confirm-create-room" class="primary-btn">作成</button>
       </div>
     </div>
   </div>
 
-  <div class="chat-container" style="display: none;">
-    <header>
-      <div class="header-left">
-        <button id="back-to-lobby" title="ロビーに戻る"><i class="fas fa-arrow-left"></i></button>
-        <h1 id="current-room-name"><i class="fas fa-comments"></i> Chat App</h1>
+  <!-- ユーザープロフィールモーダル -->
+  <div id="user-profile-modal" class="modal">
+    <div class="modal-content">
+      <div class="user-info">
+        <img id="modal-user-avatar" src="" alt="Avatar">
+        <h2 id="modal-user-name"></h2>
+        <p id="modal-user-bio"></p>
       </div>
-      <div class="header-controls">
-        <div id="voice-control" class="control-item">
-          <button id="mic-btn" class="icon-btn muted" title="マイクのオン/オフ">
-            <i class="fas fa-microphone-slash"></i>
-          </button>
-          <span class="control-label">ボイス</span>
-        </div>
-        <div id="tts-control" class="control-item">
-          <label class="switch">
-            <input type="checkbox" id="tts-toggle">
-            <span class="slider round"></span>
-          </label>
-          <span class="tts-label"><i class="fas fa-volume-up"></i> 読み上げ</span>
-        </div>
-        <div id="user-count">
-          <i class="fas fa-users"></i> <span id="online-count">0</span> 人
-        </div>
+      <div class="modal-buttons">
+        <button id="close-profile-modal">閉じる</button>
+        <button id="start-private-chat" class="primary-btn">メッセージを送る</button>
       </div>
-    </header>
-
-    <main>
-      <div id="sidebar">
-        <h3>参加者リスト</h3>
-        <ul id="users-list"></ul>
-      </div>
-
-      <div id="chat-window">
-        <div id="messages"></div>
-        <div id="typing-indicator"></div>
-        <form id="chat-form">
-          <input type="text" id="msg-input" placeholder="メッセージを入力..." autocomplete="off">
-          <button type="submit"><i class="fas fa-paper-plane"></i></button>
-        </form>
-      </div>
-    </main>
+    </div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

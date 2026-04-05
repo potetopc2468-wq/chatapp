@@ -20,68 +20,109 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 接続中のユーザー情報を保持 (socket.id -> userData)
+// socket.id -> userData
 const allUsers = new Map();
-// ルームごとの情報を保持 (roomName -> Set of userDatas)
+// roomName -> Set of userDatas
 const rooms = new Map();
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
+  // 初期ユーザー登録 (デフォルト)
+  const defaultUser = {
+    id: socket.id,
+    username: `User_${socket.id.substr(0, 4)}`,
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${socket.id}`,
+    bio: 'よろしくお願いします！',
+    peerId: null,
+    room: 'General',
+    isMuted: true,
+    isSpeaking: false,
+    isInVoice: false
+  };
+  allUsers.set(socket.id, defaultUser);
+
   // ルーム一覧の取得
   socket.on('getRooms', () => {
-    const roomList = Array.from(rooms.keys()).map(name => ({
-      name,
-      count: rooms.get(name).size
-    }));
+    const roomList = Array.from(rooms.keys())
+      .filter(name => name !== 'General')
+      .map(name => {
+        const roomSet = rooms.get(name);
+        const owner = Array.from(roomSet)[0]; // 最初のユーザーをオーナーとする
+        return {
+          name,
+          count: roomSet.size,
+          ownerAvatar: owner ? owner.avatar : null
+        };
+      });
     socket.emit('roomList', roomList);
   });
 
-  // ユーザーの入室 (ルーム機能対応)
-  socket.on('join', (data) => {
-    const { username, peerId, roomName } = data;
-    const room = roomName || 'General';
-    
-    // 前のルームがあれば退出 (念のため)
-    socket.leaveAll();
-    socket.join(room);
-
-    const userData = { 
-      id: socket.id, 
-      username: username || `Guest_${socket.id.substr(0, 4)}`,
-      peerId: peerId,
-      room: room
-    };
-    
-    allUsers.set(socket.id, userData);
-    
-    if (!rooms.has(room)) {
-      rooms.set(room, new Set());
+  // プロフィール更新
+  socket.on('updateProfile', (data) => {
+    const user = allUsers.get(socket.id);
+    if (user) {
+      user.username = data.username || user.username;
+      user.avatar = data.avatar || user.avatar;
+      user.bio = data.bio || user.bio;
+      
+      // 全ルームに反映
+      io.emit('userUpdated', user);
+      
+      // ルーム内のユーザーリストも更新
+      if (rooms.has(user.room)) {
+        io.to(user.room).emit('userList', Array.from(rooms.get(user.room)));
+      }
     }
-    rooms.get(room).add(userData);
-    
-    // そのルームの全員にシステムメッセージを送信
-    io.to(room).emit('message', {
-      type: 'system',
-      text: `${userData.username}がルーム「${room}」に入室しました`,
-      timestamp: new Date().toLocaleTimeString()
-    });
+  });
 
-    // そのルームのユーザーリストを更新
-    const roomUsers = Array.from(rooms.get(room));
-    io.to(room).emit('userList', roomUsers);
+  // ルーム入室
+  socket.on('join', (data) => {
+    const { roomName, peerId } = data;
+    const user = allUsers.get(socket.id);
+    if (!user) return;
 
-    // 全体にルームリストの更新を通知
+    const oldRoom = user.room;
+    socket.leave(oldRoom);
+    if (rooms.has(oldRoom)) {
+      const oldRoomSet = rooms.get(oldRoom);
+      oldRoomSet.forEach(u => {
+        if (u.id === socket.id) oldRoomSet.delete(u);
+      });
+      if (oldRoomSet.size === 0 && oldRoom !== 'General') rooms.delete(oldRoom);
+      else io.to(oldRoom).emit('userList', Array.from(oldRoomSet));
+    }
+
+    user.room = roomName || 'General';
+    user.peerId = peerId || user.peerId;
+    socket.join(user.room);
+
+    if (!rooms.has(user.room)) rooms.set(user.room, new Set());
+    rooms.get(user.room).add(user);
+
+    io.to(user.room).emit('userList', Array.from(rooms.get(user.room)));
     updateGlobalRoomList();
   });
 
-  // メッセージの受信と転送
+  // ボイスステータス更新
+  socket.on('voiceStatus', (data) => {
+    const user = allUsers.get(socket.id);
+    if (user) {
+      user.isInVoice = data.isInVoice;
+      user.isMuted = data.isMuted;
+      user.isSpeaking = data.isSpeaking;
+      io.to(user.room).emit('userList', Array.from(rooms.get(user.room)));
+    }
+  });
+
+  // チャットメッセージ
   socket.on('chatMessage', (msg) => {
     const user = allUsers.get(socket.id);
     if (user) {
       io.to(user.room).emit('message', {
         type: 'user',
         username: user.username,
+        avatar: user.avatar,
         text: msg,
         timestamp: new Date().toLocaleTimeString(),
         id: socket.id
@@ -89,40 +130,48 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 切断時
+  // 個人チャット (DM)
+  socket.on('privateMessage', (data) => {
+    const { to, text } = data;
+    const fromUser = allUsers.get(socket.id);
+    const toUser = allUsers.get(to);
+    if (fromUser && toUser) {
+      const msg = {
+        from: socket.id,
+        fromName: fromUser.username,
+        fromAvatar: fromUser.avatar,
+        text,
+        timestamp: new Date().toLocaleTimeString()
+      };
+      io.to(to).emit('privateMessage', msg);
+      socket.emit('privateMessageSent', { ...msg, to });
+    }
+  });
+
   socket.on('disconnect', () => {
     const user = allUsers.get(socket.id);
     if (user) {
-      const room = user.room;
-      io.to(room).emit('message', {
-        type: 'system',
-        text: `${user.username}が退室しました`,
-        timestamp: new Date().toLocaleTimeString()
-      });
-      
-      allUsers.delete(socket.id);
-      if (rooms.has(room)) {
-        const roomSet = rooms.get(room);
+      if (rooms.has(user.room)) {
+        const roomSet = rooms.get(user.room);
         roomSet.forEach(u => {
           if (u.id === socket.id) roomSet.delete(u);
         });
-        
-        if (roomSet.size === 0) {
-          rooms.delete(room);
-        } else {
-          io.to(room).emit('userList', Array.from(roomSet));
-        }
+        if (roomSet.size === 0 && user.room !== 'General') rooms.delete(user.room);
+        else io.to(user.room).emit('userList', Array.from(roomSet));
       }
+      allUsers.delete(socket.id);
       updateGlobalRoomList();
     }
-    console.log('User disconnected:', socket.id);
   });
 
   function updateGlobalRoomList() {
-    const roomList = Array.from(rooms.keys()).map(name => ({
-      name,
-      count: rooms.get(name).size
-    }));
+    const roomList = Array.from(rooms.keys())
+      .filter(name => name !== 'General')
+      .map(name => {
+        const roomSet = rooms.get(name);
+        const owner = Array.from(roomSet)[0];
+        return { name, count: roomSet.size, ownerAvatar: owner ? owner.avatar : null };
+      });
     io.emit('roomList', roomList);
   }
 });

@@ -1,251 +1,248 @@
 const socket = io();
 
-const lobbyScreen = document.getElementById('lobby-screen');
-const chatContainer = document.querySelector('.chat-container');
-const usernameInput = document.getElementById('username-input');
-const newRoomInput = document.getElementById('new-room-input');
-const createBtn = document.getElementById('create-btn');
-const roomListUl = document.getElementById('room-list');
-const currentRoomName = document.getElementById('current-room-name');
-const backToLobbyBtn = document.getElementById('back-to-lobby');
+// UI Elements
+const navItems = document.querySelectorAll('.nav-item');
+const tabPanels = document.querySelectorAll('.tab-panel');
+const groupList = document.getElementById('group-list');
+const privateChatList = document.getElementById('private-chat-list');
+const profileAvatarPreview = document.getElementById('profile-avatar-preview');
+const profileNameInput = document.getElementById('profile-name-input');
+const profileBioInput = document.getElementById('profile-bio-input');
+const saveProfileBtn = document.getElementById('save-profile-btn');
+const changeAvatarBtn = document.getElementById('change-avatar-btn');
 
-const chatForm = document.getElementById('chat-form');
-const msgInput = document.getElementById('msg-input');
-const messages = document.getElementById('messages');
-const onlineCount = document.getElementById('online-count');
-const usersList = document.getElementById('users-list');
-const ttsToggle = document.getElementById('tts-toggle');
-const micBtn = document.getElementById('mic-btn');
+const createRoomModal = document.getElementById('create-room-modal');
+const openCreateRoomBtn = document.getElementById('open-create-room');
+const closeRoomModalBtn = document.getElementById('close-modal');
+const confirmCreateRoomBtn = document.getElementById('confirm-create-room');
+const newRoomNameInput = document.getElementById('new-room-name');
 
-let myId = null;
-let username = '';
-let currentRoom = '';
-let isTtsEnabled = false;
-let myPeerId = null;
+const userProfileModal = document.getElementById('user-profile-modal');
+const closeProfileModalBtn = document.getElementById('close-profile-modal');
+const startPrivateChatBtn = document.getElementById('start-private-chat');
+const modalUserAvatar = document.getElementById('modal-user-avatar');
+const modalUserName = document.getElementById('modal-user-name');
+const modalUserBio = document.getElementById('modal-user-bio');
+
+const voiceParticipants = document.getElementById('voice-participants');
+const joinVoiceBtn = document.getElementById('join-voice-btn');
+const micToggleBtn = document.getElementById('mic-toggle-btn');
+
+// State
+let myUser = null;
+let currentTab = 'main';
 let peer = null;
+let myPeerId = null;
 let localStream = null;
 let peers = {};
+let allUsersInRoom = [];
+let selectedUserForProfile = null;
 
-// --- ロビー機能 ---
-
-// ルーム一覧の受信
-socket.on('roomList', (rooms) => {
-  roomListUl.innerHTML = '';
-  if (rooms.length === 0) {
-    roomListUl.innerHTML = '<li class="no-rooms">公開ルームがありません。「General」がデフォルトです。</li>';
-    // デフォルトルームを表示
-    addRoomItem('General', 0);
-  } else {
-    rooms.forEach(room => {
-      addRoomItem(room.name, room.count);
-    });
-    // Generalがなければ追加
-    if (!rooms.find(r => r.name === 'General')) {
-      addRoomItem('General', 0);
-    }
-  }
+// --- Tab Navigation ---
+navItems.forEach(item => {
+  item.addEventListener('click', () => {
+    const tab = item.dataset.tab;
+    switchTab(tab);
+  });
 });
 
-function addRoomItem(name, count) {
-  const li = document.createElement('li');
-  li.innerHTML = `
-    <span class="room-name">${name}</span>
-    <span class="room-count">${count} 人</span>
-  `;
-  li.onclick = () => joinRoom(name);
-  roomListUl.appendChild(li);
-}
-
-// ルーム作成
-createBtn.onclick = () => {
-  const roomName = newRoomInput.value.trim();
-  if (roomName) {
-    joinRoom(roomName);
-  } else {
-    alert('ルーム名を入力してください');
-  }
-};
-
-// ロビーに戻る
-backToLobbyBtn.onclick = () => {
-  if (confirm('ルームを退出してロビーに戻りますか？')) {
-    location.reload(); // シンプルにリロードして状態をリセット
-  }
-};
-
-// ページ読み込み時にルーム一覧を要求
-socket.emit('getRooms');
-
-// --- チャット & ボイス機能 ---
-
-async function joinRoom(roomName) {
-  username = usernameInput.value.trim();
-  if (!username) {
-    alert('ニックネームを入力してください');
-    return;
-  }
-
-  currentRoom = roomName;
-  currentRoomName.innerHTML = `<i class="fas fa-comments"></i> ${roomName}`;
+function switchTab(tab) {
+  currentTab = tab;
+  navItems.forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
+  tabPanels.forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
   
-  lobbyScreen.style.display = 'none';
-  chatContainer.style.display = 'flex';
-
-  await getMedia();
-  initPeer();
-  
-  // Peer ID取得後にJoin
-  const checkPeerId = setInterval(() => {
-    if (myPeerId) {
-      clearInterval(checkPeerId);
-      socket.emit('join', { username, peerId: myPeerId, roomName: currentRoom });
-      msgInput.focus();
-    }
-  }, 100);
-}
-
-// PeerJSの初期化
-function initPeer() {
-  peer = new Peer(undefined, {
-    host: '0.peerjs.com', // 公開サーバーを明示的に使用
-    secure: true
-  });
-
-  peer.on('open', (id) => {
-    myPeerId = id;
-    console.log('My peer ID is: ' + id);
-  });
-
-  peer.on('call', (call) => {
-    console.log('Receiving call from:', call.peer);
-    call.answer(localStream);
-    const audio = document.createElement('audio');
-    call.on('stream', (userAudioStream) => {
-      addAudioStream(audio, userAudioStream);
-    });
-  });
-
-  peer.on('error', (err) => {
-    console.error('PeerJS Error:', err);
-  });
-}
-
-function addAudioStream(audio, stream) {
-  audio.srcObject = stream;
-  audio.addEventListener('loadedmetadata', () => {
-    audio.play();
-  });
-}
-
-async function getMedia() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    localStream.getAudioTracks()[0].enabled = false; // 初期はミュート
-    micBtn.classList.remove('active');
-    micBtn.classList.add('muted');
-  } catch (err) {
-    console.error('Failed to get local stream', err);
-    // マイクがなくてもチャットは続けられるようにする
-    localStream = null;
+  if (tab === 'group') socket.emit('getRooms');
+  if (tab === 'profile' && myUser) {
+    profileAvatarPreview.src = myUser.avatar;
+    profileNameInput.value = myUser.username;
+    profileBioInput.value = myUser.bio;
   }
 }
 
-micBtn.addEventListener('click', () => {
-  if (!localStream) {
-    alert('マイクの使用が許可されていないか、デバイスが見つかりません');
-    return;
-  }
-  
-  const enabled = localStream.getAudioTracks()[0].enabled;
-  if (enabled) {
-    localStream.getAudioTracks()[0].enabled = false;
-    micBtn.classList.replace('active', 'muted');
-    micBtn.innerHTML = '<i class="fas fa-microphone-slash"></i>';
-  } else {
-    localStream.getAudioTracks()[0].enabled = true;
-    micBtn.classList.replace('muted', 'active');
-    micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
-  }
-});
-
-ttsToggle.addEventListener('change', (e) => {
-  isTtsEnabled = e.target.checked;
-  if (isTtsEnabled) {
-    const utter = new SpeechSynthesisUtterance('読み上げモードをオンにしました');
-    utter.lang = 'ja-JP';
-    window.speechSynthesis.speak(utter);
-  }
-});
-
-chatForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const msg = msgInput.value.trim();
-  if (msg) {
-    socket.emit('chatMessage', msg);
-    msgInput.value = '';
-  }
-});
-
-socket.on('message', (msg) => {
-  displayMessage(msg);
-  messages.scrollTop = messages.scrollHeight;
-
-  if (isTtsEnabled) {
-    const text = msg.type === 'system' ? msg.text : `${msg.username}さんから、${msg.text}`;
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = 'ja-JP';
-    window.speechSynthesis.speak(utter);
-  }
+// --- Socket Events ---
+socket.on('connect', () => {
+  console.log('Connected as:', socket.id);
+  // 初期ルーム参加
+  socket.emit('join', { roomName: 'General' });
 });
 
 socket.on('userList', (users) => {
-  onlineCount.textContent = users.length;
-  usersList.innerHTML = '';
-  
-  users.forEach(user => {
-    const li = document.createElement('li');
-    li.innerHTML = `<i class="fas fa-circle" style="color: #2ecc71; font-size: 8px; margin-right: 10px;"></i> ${user.username}`;
-    usersList.appendChild(li);
-
-    if (user.id !== socket.id && user.peerId && !peers[user.id]) {
-      connectToNewUser(user.id, user.peerId);
-    }
-  });
+  allUsersInRoom = users;
+  const me = users.find(u => u.id === socket.id);
+  if (me) myUser = me;
+  updateVoiceUI(users);
 });
 
-function connectToNewUser(userId, peerId) {
-  if (!localStream) return;
-  
-  console.log(`Calling user ${userId} at peer ${peerId}`);
-  const call = peer.call(peerId, localStream);
-  const audio = document.createElement('audio');
-  
-  call.on('stream', (userAudioStream) => {
-    addAudioStream(audio, userAudioStream);
-  });
-  
-  call.on('close', () => {
-    audio.remove();
-    delete peers[userId];
-  });
-
-  peers[userId] = call;
-}
-
-socket.on('connect', () => {
-  myId = socket.id;
+socket.on('roomList', (rooms) => {
+  renderGroupList(rooms);
 });
 
-function displayMessage(msg) {
+socket.on('message', (msg) => {
+  const area = document.getElementById('messages-main');
+  appendMessage(area, msg);
+});
+
+socket.on('privateMessage', (msg) => {
+  // 簡易的にプライベートチャットリストを更新
+  renderPrivateChatList(msg);
+});
+
+// --- UI Rendering ---
+function appendMessage(container, msg) {
   const div = document.createElement('div');
-  div.classList.add('message');
-  if (msg.type === 'system') div.classList.add('system');
-  if (msg.id === myId) div.classList.add('me');
-
-  div.innerHTML = msg.type === 'system' 
-    ? `<span class="text">${msg.text}</span>`
-    : `<span class="username">${msg.username} <span style="font-weight:normal; font-size:9px; color:#999;">${msg.timestamp}</span></span>
-       <span class="text">${msg.text}</span>`;
-  
-  messages.appendChild(div);
+  div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
+  div.innerHTML = `
+    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
+    <div class="msg-content">
+      <span class="msg-name">${msg.username}</span>
+      <div class="msg-text">${msg.text}</div>
+    </div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
 }
+
+function renderGroupList(rooms) {
+  groupList.innerHTML = '';
+  rooms.forEach(room => {
+    const div = document.createElement('div');
+    div.className = 'list-item';
+    div.innerHTML = `
+      <img src="${room.ownerAvatar || 'https://api.dicebear.com/7.x/identicon/svg'}" class="list-avatar">
+      <div class="list-info">
+        <div class="list-name">${room.name}</div>
+        <div class="list-sub">${room.count} 人が参加中</div>
+      </div>
+    `;
+    div.onclick = () => {
+      if (confirm(`${room.name} に参加しますか？`)) {
+        socket.emit('join', { roomName: room.name });
+        switchTab('main');
+        document.getElementById('messages-main').innerHTML = ''; // 簡易クリア
+      }
+    };
+    groupList.appendChild(div);
+  });
+}
+
+function updateVoiceUI(users) {
+  voiceParticipants.innerHTML = '';
+  users.filter(u => u.isInVoice).forEach(u => {
+    const img = document.createElement('img');
+    img.src = u.avatar;
+    img.className = `voice-avatar ${u.isSpeaking ? 'speaking' : ''} ${u.isMuted ? 'muted' : ''}`;
+    voiceParticipants.appendChild(img);
+  });
+}
+
+// --- Profile & DM ---
+function showUserProfile(userId) {
+  const user = allUsersInRoom.find(u => u.id === userId);
+  if (!user) return;
+  selectedUserForProfile = user;
+  modalUserAvatar.src = user.avatar;
+  modalUserName.textContent = user.username;
+  modalUserBio.textContent = user.bio;
+  userProfileModal.style.display = 'flex';
+}
+
+closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
+
+startPrivateChatBtn.onclick = () => {
+  userProfileModal.style.display = 'none';
+  switchTab('private');
+  // 実際にはここでDM画面に切り替えるなどの処理
+};
+
+saveProfileBtn.onclick = () => {
+  const data = {
+    username: profileNameInput.value,
+    bio: profileBioInput.value,
+    avatar: profileAvatarPreview.src
+  };
+  socket.emit('updateProfile', data);
+  alert('プロフィールを保存しました');
+};
+
+changeAvatarBtn.onclick = () => {
+  const newSeed = Math.random().toString(36).substring(7);
+  const newAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${newSeed}`;
+  profileAvatarPreview.src = newAvatar;
+};
+
+// --- Room Modal ---
+openCreateRoomBtn.onclick = () => createRoomModal.style.display = 'flex';
+closeRoomModalBtn.onclick = () => createRoomModal.style.display = 'none';
+confirmCreateRoomBtn.onclick = () => {
+  const name = newRoomNameInput.value.trim();
+  if (name) {
+    socket.emit('join', { roomName: name });
+    createRoomModal.style.display = 'none';
+    switchTab('main');
+    document.getElementById('messages-main').innerHTML = '';
+  }
+};
+
+// --- Voice Logic ---
+joinVoiceBtn.onclick = async () => {
+  if (!localStream) {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      initPeer();
+      joinVoiceBtn.classList.add('active');
+      micToggleBtn.style.display = 'block';
+      
+      const checkPeerId = setInterval(() => {
+        if (myPeerId) {
+          clearInterval(checkPeerId);
+          socket.emit('voiceStatus', { isInVoice: true, isMuted: true, isSpeaking: false });
+        }
+      }, 100);
+    } catch (e) {
+      alert('マイクの使用を許可してください');
+    }
+  } else {
+    // 退出
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+    joinVoiceBtn.classList.remove('active');
+    micToggleBtn.style.display = 'none';
+    socket.emit('voiceStatus', { isInVoice: false, isMuted: true, isSpeaking: false });
+  }
+};
+
+micToggleBtn.onclick = () => {
+  if (localStream) {
+    const audioTrack = localStream.getAudioTracks()[0];
+    audioTrack.enabled = !audioTrack.enabled;
+    micToggleBtn.classList.toggle('muted', !audioTrack.enabled);
+    micToggleBtn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+    socket.emit('voiceStatus', { isInVoice: true, isMuted: !audioTrack.enabled, isSpeaking: false });
+  }
+};
+
+function initPeer() {
+  peer = new Peer(undefined, { host: '0.peerjs.com', secure: true });
+  peer.on('open', id => myPeerId = id);
+  peer.on('call', call => {
+    call.answer(localStream);
+    const audio = document.createElement('audio');
+    call.on('stream', stream => {
+      audio.srcObject = stream;
+      audio.play();
+    });
+  });
+}
+
+// --- Chat Form ---
+document.querySelectorAll('.chat-input-form').forEach(form => {
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const input = form.querySelector('input');
+    const text = input.value.trim();
+    if (text) {
+      socket.emit('chatMessage', text);
+      input.value = '';
+    }
+  };
+});
