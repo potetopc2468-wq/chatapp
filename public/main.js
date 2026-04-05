@@ -1,23 +1,56 @@
 const socket = io();
 
-// UI Elements
+// UI Elements - Auth
+const authScreen = document.getElementById('auth-screen');
+const authTitle = document.getElementById('auth-title');
+const loginForm = document.getElementById('login-form');
+const signupForm = document.getElementById('signup-form');
+const showSignup = document.getElementById('show-signup');
+const showLogin = document.getElementById('show-login');
+
+const loginBtn = document.getElementById('login-btn');
+const loginIdInput = document.getElementById('login-id');
+const loginPwInput = document.getElementById('login-pw');
+
+const signupBtn = document.getElementById('signup-btn');
+const signupIdInput = document.getElementById('signup-id');
+const signupNameInput = document.getElementById('signup-name');
+const signupPwInput = document.getElementById('signup-pw');
+
+// UI Elements - App
+const appContainer = document.getElementById('app');
 const navItems = document.querySelectorAll('.nav-item');
 const tabPanels = document.querySelectorAll('.tab-panel');
+const chatTitle = document.getElementById('chat-title');
+const backToLobbyBtn = document.getElementById('back-to-lobby');
+const messagesMain = document.getElementById('messages-main');
 const groupList = document.getElementById('group-list');
 const privateChatList = document.getElementById('private-chat-list');
-const profileAvatarPreview = document.getElementById('profile-avatar-preview');
+
+// Profile
+const profileIdDisplay = document.getElementById('profile-id-display');
 const profileNameInput = document.getElementById('profile-name-input');
 const profileBioInput = document.getElementById('profile-bio-input');
+const profileAvatarPreview = document.getElementById('profile-avatar-preview');
 const saveProfileBtn = document.getElementById('save-profile-btn');
 const changeAvatarBtn = document.getElementById('change-avatar-btn');
 const avatarUpload = document.getElementById('avatar-upload');
 
+// Crop
+const cropModal = document.getElementById('crop-modal');
+const cropImage = document.getElementById('crop-image');
+const confirmCropBtn = document.getElementById('confirm-crop');
+const cancelCropBtn = document.getElementById('cancel-crop');
+let cropper = null;
+
+// Room
 const createRoomModal = document.getElementById('create-room-modal');
 const openCreateRoomBtn = document.getElementById('open-create-room');
 const closeRoomModalBtn = document.getElementById('close-modal');
 const confirmCreateRoomBtn = document.getElementById('confirm-create-room');
 const newRoomNameInput = document.getElementById('new-room-name');
 
+// User Profile Modal
 const userProfileModal = document.getElementById('user-profile-modal');
 const closeProfileModalBtn = document.getElementById('close-profile-modal');
 const startPrivateChatBtn = document.getElementById('start-private-chat');
@@ -25,6 +58,7 @@ const modalUserAvatar = document.getElementById('modal-user-avatar');
 const modalUserName = document.getElementById('modal-user-name');
 const modalUserBio = document.getElementById('modal-user-bio');
 
+// Voice
 const voiceParticipants = document.getElementById('voice-participants');
 const joinVoiceBtn = document.getElementById('join-voice-btn');
 const micToggleBtn = document.getElementById('mic-toggle-btn');
@@ -32,78 +66,106 @@ const micToggleBtn = document.getElementById('mic-toggle-btn');
 // State
 let myUser = null;
 let currentTab = 'main';
+let currentRoom = 'General';
 let peer = null;
 let myPeerId = null;
 let localStream = null;
 let peers = {};
 let allUsersInRoom = [];
-let selectedUserForProfile = null;
 
-// --- Tab Navigation ---
+// --- Auth Logic ---
+showSignup.onclick = (e) => {
+  e.preventDefault();
+  loginForm.style.display = 'none';
+  signupForm.style.display = 'block';
+  authTitle.textContent = '新規登録';
+};
+
+showLogin.onclick = (e) => {
+  e.preventDefault();
+  signupForm.style.display = 'none';
+  loginForm.style.display = 'block';
+  authTitle.textContent = 'ログイン';
+};
+
+signupBtn.onclick = () => {
+  const data = {
+    userId: signupIdInput.value.trim(),
+    username: signupNameInput.value.trim(),
+    password: signupPwInput.value
+  };
+  if (!data.userId || !data.password) return alert('IDとパスワードを入力してください');
+  socket.emit('signup', data);
+};
+
+loginBtn.onclick = () => {
+  const data = {
+    userId: loginIdInput.value.trim(),
+    password: loginPwInput.value
+  };
+  if (!data.userId || !data.password) return alert('IDとパスワードを入力してください');
+  socket.emit('login', data);
+};
+
+socket.on('signupSuccess', () => {
+  alert('登録完了！ログインしてください');
+  showLogin.click();
+});
+
+socket.on('signupError', (msg) => alert(msg));
+socket.on('loginError', (msg) => alert(msg));
+
+socket.on('loginSuccess', (userData) => {
+  myUser = userData;
+  authScreen.style.display = 'none';
+  appContainer.style.display = 'flex';
+  updateProfileUI();
+});
+
+function updateProfileUI() {
+  profileIdDisplay.value = myUser.userId;
+  profileNameInput.value = myUser.username;
+  profileBioInput.value = myUser.bio;
+  profileAvatarPreview.src = myUser.avatar;
+}
+
+// --- Navigation ---
 navItems.forEach(item => {
-  item.addEventListener('click', () => {
+  item.onclick = () => {
     const tab = item.dataset.tab;
     switchTab(tab);
-  });
+  };
 });
 
 function switchTab(tab) {
   currentTab = tab;
   navItems.forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
   tabPanels.forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
-  
   if (tab === 'group') socket.emit('getRooms');
-  if (tab === 'profile' && myUser) {
-    profileAvatarPreview.src = myUser.avatar;
-    profileNameInput.value = myUser.username;
-    profileBioInput.value = myUser.bio;
-  }
 }
 
-// --- Socket Events ---
-socket.on('connect', () => {
-  console.log('Connected as:', socket.id);
-  // 初期ルーム参加
+backToLobbyBtn.onclick = () => {
   socket.emit('join', { roomName: 'General' });
-});
+};
 
+// --- Socket Events ---
 socket.on('userList', (users) => {
   allUsersInRoom = users;
   const me = users.find(u => u.id === socket.id);
-  if (me) myUser = me;
+  if (me) {
+    myUser = { ...myUser, ...me };
+    if (me.room !== 'General') {
+      chatTitle.textContent = me.room;
+      backToLobbyBtn.style.display = 'block';
+    } else {
+      chatTitle.textContent = 'メインチャット';
+      backToLobbyBtn.style.display = 'none';
+    }
+  }
   updateVoiceUI(users);
 });
 
 socket.on('roomList', (rooms) => {
-  renderGroupList(rooms);
-});
-
-socket.on('message', (msg) => {
-  const area = document.getElementById('messages-main');
-  appendMessage(area, msg);
-});
-
-socket.on('privateMessage', (msg) => {
-  // 簡易的にプライベートチャットリストを更新
-  renderPrivateChatList(msg);
-});
-
-// --- UI Rendering ---
-function appendMessage(container, msg) {
-  const div = document.createElement('div');
-  div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
-  div.innerHTML = `
-    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
-    <div class="msg-content">
-      <span class="msg-name">${msg.username}</span>
-      <div class="msg-text">${msg.text}</div>
-    </div>
-  `;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
-}
-
-function renderGroupList(rooms) {
   groupList.innerHTML = '';
   rooms.forEach(room => {
     const div = document.createElement('div');
@@ -116,16 +178,29 @@ function renderGroupList(rooms) {
       </div>
     `;
     div.onclick = () => {
-      if (confirm(`${room.name} に参加しますか？`)) {
-        socket.emit('join', { roomName: room.name });
-        switchTab('main');
-        document.getElementById('messages-main').innerHTML = ''; // 簡易クリア
-      }
+      socket.emit('join', { roomName: room.name });
+      switchTab('main');
+      messagesMain.innerHTML = '';
     };
     groupList.appendChild(div);
   });
-}
+});
 
+socket.on('message', (msg) => {
+  const div = document.createElement('div');
+  div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
+  div.innerHTML = `
+    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
+    <div class="msg-content">
+      <span class="msg-name">${msg.username}</span>
+      <div class="msg-text">${msg.text}</div>
+    </div>
+  `;
+  messagesMain.appendChild(div);
+  messagesMain.scrollTop = messagesMain.scrollHeight;
+});
+
+// --- Voice UI ---
 function updateVoiceUI(users) {
   voiceParticipants.innerHTML = '';
   users.filter(u => u.isInVoice).forEach(u => {
@@ -136,57 +211,52 @@ function updateVoiceUI(users) {
   });
 }
 
-// --- Profile & DM ---
-function showUserProfile(userId) {
-  const user = allUsersInRoom.find(u => u.id === userId);
-  if (!user) return;
-  selectedUserForProfile = user;
-  modalUserAvatar.src = user.avatar;
-  modalUserName.textContent = user.username;
-  modalUserBio.textContent = user.bio;
-  userProfileModal.style.display = 'flex';
-}
+// --- Profile Edit & Avatar Crop ---
+changeAvatarBtn.onclick = () => {
+  const seed = Math.random().toString(36).substring(7);
+  profileAvatarPreview.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
+};
 
-closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
+avatarUpload.onchange = (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      cropImage.src = event.target.result;
+      cropModal.style.display = 'flex';
+      if (cropper) cropper.destroy();
+      cropper = new Cropper(cropImage, {
+        aspectRatio: 1,
+        viewMode: 1,
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+};
 
-startPrivateChatBtn.onclick = () => {
-  userProfileModal.style.display = 'none';
-  switchTab('private');
-  // 実際にはここでDM画面に切り替えるなどの処理
+cancelCropBtn.onclick = () => {
+  cropModal.style.display = 'none';
+  if (cropper) cropper.destroy();
+};
+
+confirmCropBtn.onclick = () => {
+  const canvas = cropper.getCroppedCanvas({ width: 200, height: 200 });
+  profileAvatarPreview.src = canvas.toDataURL();
+  cropModal.style.display = 'none';
+  cropper.destroy();
 };
 
 saveProfileBtn.onclick = () => {
   const data = {
-    username: profileNameInput.value,
-    bio: profileBioInput.value,
+    username: profileNameInput.value.trim(),
+    bio: profileBioInput.value.trim(),
     avatar: profileAvatarPreview.src
   };
   socket.emit('updateProfile', data);
   alert('プロフィールを保存しました');
 };
 
-changeAvatarBtn.onclick = () => {
-  const newSeed = Math.random().toString(36).substring(7);
-  const newAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${newSeed}`;
-  profileAvatarPreview.src = newAvatar;
-};
-
-avatarUpload.onchange = (e) => {
-  const file = e.target.files[0];
-  if (file) {
-    if (file.size > 1024 * 1024) { // 1MB制限
-      alert('ファイルサイズが大きすぎます (1MB以下にしてください)');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      profileAvatarPreview.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-  }
-};
-
-// --- Room Modal ---
+// --- Room Creation ---
 openCreateRoomBtn.onclick = () => createRoomModal.style.display = 'flex';
 closeRoomModalBtn.onclick = () => createRoomModal.style.display = 'none';
 confirmCreateRoomBtn.onclick = () => {
@@ -195,11 +265,22 @@ confirmCreateRoomBtn.onclick = () => {
     socket.emit('join', { roomName: name });
     createRoomModal.style.display = 'none';
     switchTab('main');
-    document.getElementById('messages-main').innerHTML = '';
+    messagesMain.innerHTML = '';
   }
 };
 
-// --- Voice Logic ---
+// --- User Profile Modal ---
+function showUserProfile(userId) {
+  const user = allUsersInRoom.find(u => u.id === userId);
+  if (!user) return;
+  modalUserAvatar.src = user.avatar;
+  modalUserName.textContent = user.username;
+  modalUserBio.textContent = user.bio;
+  userProfileModal.style.display = 'flex';
+}
+closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
+
+// --- Voice Chat Logic ---
 joinVoiceBtn.onclick = async () => {
   if (!localStream) {
     try {
@@ -214,11 +295,8 @@ joinVoiceBtn.onclick = async () => {
           socket.emit('voiceStatus', { isInVoice: true, isMuted: true, isSpeaking: false });
         }
       }, 100);
-    } catch (e) {
-      alert('マイクの使用を許可してください');
-    }
+    } catch (e) { alert('マイクを許可してください'); }
   } else {
-    // 退出
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
     joinVoiceBtn.classList.remove('active');
@@ -251,14 +329,12 @@ function initPeer() {
 }
 
 // --- Chat Form ---
-document.querySelectorAll('.chat-input-form').forEach(form => {
-  form.onsubmit = (e) => {
-    e.preventDefault();
-    const input = form.querySelector('input');
-    const text = input.value.trim();
-    if (text) {
-      socket.emit('chatMessage', text);
-      input.value = '';
-    }
-  };
-});
+document.querySelector('.chat-input-form').onsubmit = (e) => {
+  e.preventDefault();
+  const input = e.target.querySelector('input');
+  const text = input.value.trim();
+  if (text) {
+    socket.emit('chatMessage', text);
+    input.value = '';
+  }
+};

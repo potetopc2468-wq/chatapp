@@ -6,17 +6,41 @@
   <title>Realtime Chat App</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 </head>
 <body>
+  <!-- ログイン・新規登録画面 -->
+  <div id="auth-screen" class="overlay">
+    <div class="auth-box">
+      <h2 id="auth-title">ログイン</h2>
+      <div id="login-form">
+        <input type="text" id="login-id" placeholder="ユーザーID" maxlength="15">
+        <input type="password" id="login-pw" placeholder="パスワード">
+        <button id="login-btn" class="primary-btn">ログイン</button>
+        <p class="auth-switch">アカウントがない方は <a href="#" id="show-signup">新規登録</a></p>
+      </div>
+      <div id="signup-form" style="display: none;">
+        <input type="text" id="signup-id" placeholder="希望のユーザーID" maxlength="15">
+        <input type="text" id="signup-name" placeholder="表示名 (ニックネーム)" maxlength="15">
+        <input type="password" id="signup-pw" placeholder="パスワード">
+        <button id="signup-btn" class="primary-btn">新規登録</button>
+        <p class="auth-switch">既にアカウントがある方は <a href="#" id="show-login">ログイン</a></p>
+      </div>
+    </div>
+  </div>
+
   <!-- メインコンテナ -->
-  <div id="app">
-    <!-- 各タブの画面 -->
+  <div id="app" style="display: none;">
     <main id="main-content">
-      <!-- メインタブ (Generalチャット) -->
+      <!-- メインタブ (General/ルームチャット) -->
       <section id="tab-main" class="tab-panel active">
         <header>
-          <h1><i class="fas fa-globe"></i> メインチャット</h1>
+          <div class="header-left">
+            <button id="back-to-lobby" class="icon-btn" title="ルーム退出" style="display: none;"><i class="fas fa-arrow-left"></i></button>
+            <h1 id="chat-title">メインチャット</h1>
+          </div>
           <div class="header-voice-ui">
             <div id="voice-participants"></div>
             <div class="voice-buttons">
@@ -26,7 +50,7 @@
           </div>
         </header>
         <div id="messages-main" class="message-area"></div>
-        <form class="chat-input-form" data-target="main">
+        <form class="chat-input-form">
           <input type="text" placeholder="メッセージを入力..." autocomplete="off">
           <button type="submit"><i class="fas fa-paper-plane"></i></button>
         </form>
@@ -64,6 +88,10 @@
             </div>
           </div>
           <div class="input-group">
+            <label>ユーザーID (変更不可)</label>
+            <input type="text" id="profile-id-display" disabled>
+          </div>
+          <div class="input-group">
             <label>名前</label>
             <input type="text" id="profile-name-input">
           </div>
@@ -95,6 +123,20 @@
         <span>設定</span>
       </button>
     </nav>
+  </div>
+
+  <!-- 画像切り抜きモーダル -->
+  <div id="crop-modal" class="modal">
+    <div class="modal-content crop-content">
+      <h2>アイコンの切り抜き</h2>
+      <div class="crop-container">
+        <img id="crop-image" src="">
+      </div>
+      <div class="modal-buttons">
+        <button id="cancel-crop">キャンセル</button>
+        <button id="confirm-crop" class="primary-btn">切り抜く</button>
+      </div>
+    </div>
   </div>
 
   <!-- ルーム作成モーダル -->
