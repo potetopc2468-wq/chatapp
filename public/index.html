@@ -6,11 +6,13 @@
   <title>Realtime Chat App</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
   <div id="join-screen" class="overlay">
     <div class="join-box">
       <h2>チャットに参加</h2>
+      <p style="font-size: 12px; color: #666; margin-bottom: 10px;">ボイスチャットにはマイクの許可が必要です</p>
       <input type="text" id="username-input" placeholder="名前を入力してください..." maxlength="15">
       <button id="join-btn">参加する</button>
     </div>
@@ -20,7 +22,13 @@
     <header>
       <h1><i class="fas fa-comments"></i> Chat App</h1>
       <div class="header-controls">
-        <div id="tts-control">
+        <div id="voice-control" class="control-item">
+          <button id="mic-btn" class="icon-btn muted" title="マイクのオン/オフ">
+            <i class="fas fa-microphone-slash"></i>
+          </button>
+          <span class="control-label">ボイス</span>
+        </div>
+        <div id="tts-control" class="control-item">
           <label class="switch">
             <input type="checkbox" id="tts-toggle">
             <span class="slider round"></span>

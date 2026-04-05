@@ -27,8 +27,15 @@ io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
   // ユーザーの入室
-  socket.on('join', (username) => {
-    const user = { id: socket.id, username: username || `Guest_${socket.id.substr(0, 4)}` };
+  socket.on('join', (data) => {
+    const username = typeof data === 'string' ? data : data.username;
+    const peerId = typeof data === 'object' ? data.peerId : null;
+    
+    const user = { 
+      id: socket.id, 
+      username: username || `Guest_${socket.id.substr(0, 4)}`,
+      peerId: peerId
+    };
     users.set(socket.id, user);
     
     // 全員にシステムメッセージを送信

@@ -86,7 +86,44 @@ header {
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 15px;
+}
+
+.control-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn {
+  background: #34495e;
+  border: none;
+  border-radius: 50%;
+  color: white;
+  width: 35px;
+  height: 35px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.icon-btn:hover {
+  background: #2c3e50;
+}
+
+.icon-btn.muted {
+  background: #e74c3c;
+}
+
+.icon-btn.active {
+  background: #2ecc71;
+}
+
+.control-label {
+  font-size: 12px;
+  color: #bdc3c7;
 }
 
 #tts-control {
@@ -96,7 +133,8 @@ header {
 }
 
 .tts-label {
-  font-size: 14px;
+  font-size: 12px;
+  color: #bdc3c7;
 }
 
 /* Switch Styles */
