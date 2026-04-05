@@ -10,6 +10,7 @@ const profileNameInput = document.getElementById('profile-name-input');
 const profileBioInput = document.getElementById('profile-bio-input');
 const saveProfileBtn = document.getElementById('save-profile-btn');
 const changeAvatarBtn = document.getElementById('change-avatar-btn');
+const avatarUpload = document.getElementById('avatar-upload');
 
 const createRoomModal = document.getElementById('create-room-modal');
 const openCreateRoomBtn = document.getElementById('open-create-room');
@@ -168,6 +169,21 @@ changeAvatarBtn.onclick = () => {
   const newSeed = Math.random().toString(36).substring(7);
   const newAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${newSeed}`;
   profileAvatarPreview.src = newAvatar;
+};
+
+avatarUpload.onchange = (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    if (file.size > 1024 * 1024) { // 1MB制限
+      alert('ファイルサイズが大きすぎます (1MB以下にしてください)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      profileAvatarPreview.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
 };
 
 // --- Room Modal ---

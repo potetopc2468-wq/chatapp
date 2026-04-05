@@ -57,7 +57,11 @@
         <div class="profile-edit-area">
           <div class="avatar-edit">
             <img id="profile-avatar-preview" src="" alt="Avatar">
-            <button id="change-avatar-btn">アイコンを変更</button>
+            <div class="avatar-controls">
+              <button id="change-avatar-btn">ランダム生成</button>
+              <label for="avatar-upload" class="upload-btn">画像をアップロード</label>
+              <input type="file" id="avatar-upload" accept="image/*" style="display: none;">
+            </div>
           </div>
           <div class="input-group">
             <label>名前</label>

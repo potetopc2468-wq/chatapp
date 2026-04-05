@@ -95,6 +95,7 @@ io.on('connection', (socket) => {
 
     user.room = roomName || 'General';
     user.peerId = peerId || user.peerId;
+    user.isInVoice = false; // ルーム移動時はボイス解除
     socket.join(user.room);
 
     if (!rooms.has(user.room)) rooms.set(user.room, new Set());
@@ -111,7 +112,10 @@ io.on('connection', (socket) => {
       user.isInVoice = data.isInVoice;
       user.isMuted = data.isMuted;
       user.isSpeaking = data.isSpeaking;
-      io.to(user.room).emit('userList', Array.from(rooms.get(user.room)));
+      // ルーム内の全員に最新のユーザーリスト（ステータス込み）を送信
+      if (rooms.has(user.room)) {
+        io.to(user.room).emit('userList', Array.from(rooms.get(user.room)));
+      }
     }
   });
 

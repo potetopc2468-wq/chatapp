@@ -238,15 +238,35 @@ header h1 {
   height: 100px;
   border-radius: 50%;
   border: 3px solid #0084ff;
-  margin-bottom: 10px;
+  margin-bottom: 15px;
+  object-fit: cover;
 }
 
-#change-avatar-btn {
-  font-size: 12px;
+.avatar-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+#change-avatar-btn, .upload-btn {
+  font-size: 13px;
   color: #0084ff;
-  background: transparent;
+  background: #e7f3ff;
   border: none;
+  padding: 8px 15px;
+  border-radius: 20px;
   cursor: pointer;
+  transition: background 0.2s;
+}
+
+#change-avatar-btn:hover, .upload-btn:hover {
+  background: #dbeafe;
+}
+
+.upload-btn {
+  display: inline-block;
+  font-weight: normal;
 }
 
 .input-group {
