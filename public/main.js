@@ -1,8 +1,14 @@
 const socket = io();
 
-const joinScreen = document.getElementById('join-screen');
+const lobbyScreen = document.getElementById('lobby-screen');
+const chatContainer = document.querySelector('.chat-container');
 const usernameInput = document.getElementById('username-input');
-const joinBtn = document.getElementById('join-btn');
+const newRoomInput = document.getElementById('new-room-input');
+const createBtn = document.getElementById('create-btn');
+const roomListUl = document.getElementById('room-list');
+const currentRoomName = document.getElementById('current-room-name');
+const backToLobbyBtn = document.getElementById('back-to-lobby');
+
 const chatForm = document.getElementById('chat-form');
 const msgInput = document.getElementById('msg-input');
 const messages = document.getElementById('messages');
@@ -13,17 +19,95 @@ const micBtn = document.getElementById('mic-btn');
 
 let myId = null;
 let username = '';
+let currentRoom = '';
 let isTtsEnabled = false;
 let myPeerId = null;
 let peer = null;
 let localStream = null;
-const peers = {};
+let peers = {};
+
+// --- ロビー機能 ---
+
+// ルーム一覧の受信
+socket.on('roomList', (rooms) => {
+  roomListUl.innerHTML = '';
+  if (rooms.length === 0) {
+    roomListUl.innerHTML = '<li class="no-rooms">公開ルームがありません。「General」がデフォルトです。</li>';
+    // デフォルトルームを表示
+    addRoomItem('General', 0);
+  } else {
+    rooms.forEach(room => {
+      addRoomItem(room.name, room.count);
+    });
+    // Generalがなければ追加
+    if (!rooms.find(r => r.name === 'General')) {
+      addRoomItem('General', 0);
+    }
+  }
+});
+
+function addRoomItem(name, count) {
+  const li = document.createElement('li');
+  li.innerHTML = `
+    <span class="room-name">${name}</span>
+    <span class="room-count">${count} 人</span>
+  `;
+  li.onclick = () => joinRoom(name);
+  roomListUl.appendChild(li);
+}
+
+// ルーム作成
+createBtn.onclick = () => {
+  const roomName = newRoomInput.value.trim();
+  if (roomName) {
+    joinRoom(roomName);
+  } else {
+    alert('ルーム名を入力してください');
+  }
+};
+
+// ロビーに戻る
+backToLobbyBtn.onclick = () => {
+  if (confirm('ルームを退出してロビーに戻りますか？')) {
+    location.reload(); // シンプルにリロードして状態をリセット
+  }
+};
+
+// ページ読み込み時にルーム一覧を要求
+socket.emit('getRooms');
+
+// --- チャット & ボイス機能 ---
+
+async function joinRoom(roomName) {
+  username = usernameInput.value.trim();
+  if (!username) {
+    alert('ニックネームを入力してください');
+    return;
+  }
+
+  currentRoom = roomName;
+  currentRoomName.innerHTML = `<i class="fas fa-comments"></i> ${roomName}`;
+  
+  lobbyScreen.style.display = 'none';
+  chatContainer.style.display = 'flex';
+
+  await getMedia();
+  initPeer();
+  
+  // Peer ID取得後にJoin
+  const checkPeerId = setInterval(() => {
+    if (myPeerId) {
+      clearInterval(checkPeerId);
+      socket.emit('join', { username, peerId: myPeerId, roomName: currentRoom });
+      msgInput.focus();
+    }
+  }, 100);
+}
 
 // PeerJSの初期化
 function initPeer() {
   peer = new Peer(undefined, {
-    host: '/',
-    port: '443',
+    host: '0.peerjs.com', // 公開サーバーを明示的に使用
     secure: true
   });
 
@@ -33,13 +117,16 @@ function initPeer() {
   });
 
   peer.on('call', (call) => {
-    if (localStream) {
-      call.answer(localStream);
-      const audio = document.createElement('audio');
-      call.on('stream', (userAudioStream) => {
-        addAudioStream(audio, userAudioStream);
-      });
-    }
+    console.log('Receiving call from:', call.peer);
+    call.answer(localStream);
+    const audio = document.createElement('audio');
+    call.on('stream', (userAudioStream) => {
+      addAudioStream(audio, userAudioStream);
+    });
+  });
+
+  peer.on('error', (err) => {
+    console.error('PeerJS Error:', err);
   });
 }
 
@@ -50,40 +137,37 @@ function addAudioStream(audio, stream) {
   });
 }
 
-// マイクの取得
 async function getMedia() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // 初期状態はミュート
-    localStream.getAudioTracks()[0].enabled = false;
-    micBtn.classList.remove('muted');
-    micBtn.classList.add('active');
-    micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+    localStream.getAudioTracks()[0].enabled = false; // 初期はミュート
+    micBtn.classList.remove('active');
+    micBtn.classList.add('muted');
   } catch (err) {
     console.error('Failed to get local stream', err);
-    alert('マイクが取得できませんでした。ボイスチャットは利用できません。');
+    // マイクがなくてもチャットは続けられるようにする
+    localStream = null;
   }
 }
 
-// マイクボタンのクリック
 micBtn.addEventListener('click', () => {
-  if (!localStream) return;
+  if (!localStream) {
+    alert('マイクの使用が許可されていないか、デバイスが見つかりません');
+    return;
+  }
   
   const enabled = localStream.getAudioTracks()[0].enabled;
   if (enabled) {
     localStream.getAudioTracks()[0].enabled = false;
-    micBtn.classList.remove('active');
-    micBtn.classList.add('muted');
+    micBtn.classList.replace('active', 'muted');
     micBtn.innerHTML = '<i class="fas fa-microphone-slash"></i>';
   } else {
     localStream.getAudioTracks()[0].enabled = true;
-    micBtn.classList.remove('muted');
-    micBtn.classList.add('active');
+    micBtn.classList.replace('muted', 'active');
     micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
   }
 });
 
-// 読み上げ設定の切り替え
 ttsToggle.addEventListener('change', (e) => {
   isTtsEnabled = e.target.checked;
   if (isTtsEnabled) {
@@ -93,56 +177,27 @@ ttsToggle.addEventListener('change', (e) => {
   }
 });
 
-// 参加ボタンのクリック
-joinBtn.addEventListener('click', async () => {
-  username = usernameInput.value.trim();
-  if (username) {
-    await getMedia();
-    initPeer();
-    
-    // Peer IDが取得できるまで少し待つ
-    const checkPeerId = setInterval(() => {
-      if (myPeerId) {
-        clearInterval(checkPeerId);
-        socket.emit('join', { username, peerId: myPeerId });
-        joinScreen.style.display = 'none';
-        msgInput.focus();
-      }
-    }, 100);
-  } else {
-    alert('名前を入力してください');
-  }
-});
-
-// メッセージ送信
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const msg = msgInput.value.trim();
   if (msg) {
     socket.emit('chatMessage', msg);
     msgInput.value = '';
-    msgInput.focus();
   }
 });
 
-// メッセージ受信
 socket.on('message', (msg) => {
   displayMessage(msg);
   messages.scrollTop = messages.scrollHeight;
 
-  if (isTtsEnabled && msg.type === 'user') {
-    const textToSpeak = `${msg.username}さんから、${msg.text}`;
-    const utter = new SpeechSynthesisUtterance(textToSpeak);
-    utter.lang = 'ja-JP';
-    window.speechSynthesis.speak(utter);
-  } else if (isTtsEnabled && msg.type === 'system') {
-    const utter = new SpeechSynthesisUtterance(msg.text);
+  if (isTtsEnabled) {
+    const text = msg.type === 'system' ? msg.text : `${msg.username}さんから、${msg.text}`;
+    const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ja-JP';
     window.speechSynthesis.speak(utter);
   }
 });
 
-// ユーザーリスト更新 & ボイス接続
 socket.on('userList', (users) => {
   onlineCount.textContent = users.length;
   usersList.innerHTML = '';
@@ -152,7 +207,6 @@ socket.on('userList', (users) => {
     li.innerHTML = `<i class="fas fa-circle" style="color: #2ecc71; font-size: 8px; margin-right: 10px;"></i> ${user.username}`;
     usersList.appendChild(li);
 
-    // 自分以外かつ、まだ接続していないユーザーに電話をかける
     if (user.id !== socket.id && user.peerId && !peers[user.id]) {
       connectToNewUser(user.id, user.peerId);
     }
@@ -172,6 +226,7 @@ function connectToNewUser(userId, peerId) {
   
   call.on('close', () => {
     audio.remove();
+    delete peers[userId];
   });
 
   peers[userId] = call;
@@ -184,19 +239,13 @@ socket.on('connect', () => {
 function displayMessage(msg) {
   const div = document.createElement('div');
   div.classList.add('message');
-  
-  if (msg.type === 'system') {
-    div.classList.add('system');
-    div.innerHTML = `<span class="text">${msg.text}</span>`;
-  } else {
-    if (msg.id === myId) {
-      div.classList.add('me');
-    }
-    div.innerHTML = `
-      <span class="username">${msg.username} <span style="font-weight: normal; font-size: 10px; color: #95a5a6;">${msg.timestamp}</span></span>
-      <span class="text">${msg.text}</span>
-    `;
-  }
+  if (msg.type === 'system') div.classList.add('system');
+  if (msg.id === myId) div.classList.add('me');
+
+  div.innerHTML = msg.type === 'system' 
+    ? `<span class="text">${msg.text}</span>`
+    : `<span class="username">${msg.username} <span style="font-weight:normal; font-size:9px; color:#999;">${msg.timestamp}</span></span>
+       <span class="text">${msg.text}</span>`;
   
   messages.appendChild(div);
 }
