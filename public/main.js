@@ -25,7 +25,14 @@ const chatTitle = document.getElementById('chat-title');
 const backToLobbyBtn = document.getElementById('back-to-lobby');
 const messagesMain = document.getElementById('messages-main');
 const groupList = document.getElementById('group-list');
+
+// DM UI
 const privateChatList = document.getElementById('private-chat-list');
+const dmWindow = document.getElementById('dm-window');
+const messagesDm = document.getElementById('messages-dm');
+const dmForm = document.getElementById('dm-form');
+const dmTitle = document.getElementById('dm-title');
+const backToDmListBtn = document.getElementById('back-to-dm-list');
 
 // Profile
 const profileIdDisplay = document.getElementById('profile-id-display');
@@ -35,6 +42,7 @@ const profileAvatarPreview = document.getElementById('profile-avatar-preview');
 const saveProfileBtn = document.getElementById('save-profile-btn');
 const changeAvatarBtn = document.getElementById('change-avatar-btn');
 const avatarUpload = document.getElementById('avatar-upload');
+const logoutBtn = document.getElementById('logout-btn');
 
 // Crop
 const cropModal = document.getElementById('crop-modal');
@@ -72,6 +80,8 @@ let myPeerId = null;
 let localStream = null;
 let peers = {};
 let allUsersInRoom = [];
+let dmConversations = JSON.parse(localStorage.getItem('chat_dms') || '{}');
+let activeDmTarget = null;
 
 // --- Auth Logic ---
 showSignup.onclick = (e) => {
@@ -89,22 +99,18 @@ showLogin.onclick = (e) => {
 };
 
 signupBtn.onclick = () => {
-  const data = {
-    userId: signupIdInput.value.trim(),
-    username: signupNameInput.value.trim(),
-    password: signupPwInput.value
-  };
-  if (!data.userId || !data.password) return alert('IDとパスワードを入力してください');
-  socket.emit('signup', data);
+  const userId = signupIdInput.value.trim();
+  const username = signupNameInput.value.trim();
+  const password = signupPwInput.value;
+  if (!userId || !password) return alert('IDとパスワードを入力してください');
+  socket.emit('signup', { userId, password, username });
 };
 
 loginBtn.onclick = () => {
-  const data = {
-    userId: loginIdInput.value.trim(),
-    password: loginPwInput.value
-  };
-  if (!data.userId || !data.password) return alert('IDとパスワードを入力してください');
-  socket.emit('login', data);
+  const userId = loginIdInput.value.trim();
+  const password = loginPwInput.value;
+  if (!userId || !password) return alert('IDとパスワードを入力してください');
+  socket.emit('login', { userId, password });
 };
 
 socket.on('signupSuccess', () => {
@@ -120,7 +126,25 @@ socket.on('loginSuccess', (userData) => {
   authScreen.style.display = 'none';
   appContainer.style.display = 'flex';
   updateProfileUI();
+  // ログイン情報を保存
+  localStorage.setItem('chat_user_id', userData.userId);
+  localStorage.setItem('chat_user_pw', loginPwInput.value || signupPwInput.value);
 });
+
+// 自動ログインの試行
+window.onload = () => {
+  const savedId = localStorage.getItem('chat_user_id');
+  const savedPw = localStorage.getItem('chat_user_pw');
+  if (savedId && savedPw) {
+    socket.emit('login', { userId: savedId, password: savedPw });
+  }
+};
+
+logoutBtn.onclick = () => {
+  localStorage.removeItem('chat_user_id');
+  localStorage.removeItem('chat_user_pw');
+  location.reload();
+};
 
 function updateProfileUI() {
   profileIdDisplay.value = myUser.userId;
@@ -142,6 +166,7 @@ function switchTab(tab) {
   navItems.forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
   tabPanels.forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
   if (tab === 'group') socket.emit('getRooms');
+  if (tab === 'private') renderPrivateChatList();
 }
 
 backToLobbyBtn.onclick = () => {
@@ -199,6 +224,95 @@ socket.on('message', (msg) => {
   messagesMain.appendChild(div);
   messagesMain.scrollTop = messagesMain.scrollHeight;
 });
+
+// DM
+socket.on('privateMessage', (msg) => {
+  const otherId = msg.from;
+  if (!dmConversations[otherId]) dmConversations[otherId] = [];
+  dmConversations[otherId].push(msg);
+  saveDMs();
+  if (activeDmTarget === otherId) {
+    appendDmMessage(msg);
+  }
+  renderPrivateChatList();
+});
+
+socket.on('privateMessageSent', (msg) => {
+  const otherId = msg.to;
+  if (!dmConversations[otherId]) dmConversations[otherId] = [];
+  dmConversations[otherId].push(msg);
+  saveDMs();
+  if (activeDmTarget === otherId) {
+    appendDmMessage(msg);
+  }
+});
+
+function saveDMs() {
+  localStorage.setItem('chat_dms', JSON.stringify(dmConversations));
+}
+
+// --- UI Rendering ---
+function renderPrivateChatList() {
+  privateChatList.innerHTML = '';
+  privateChatList.style.display = 'block';
+  dmWindow.style.display = 'none';
+  backToDmListBtn.style.display = 'none';
+  dmTitle.textContent = '個人チャット';
+
+  Object.keys(dmConversations).forEach(userId => {
+    const lastMsg = dmConversations[userId][dmConversations[userId].length - 1];
+    const div = document.createElement('div');
+    div.className = 'list-item';
+    div.innerHTML = `
+      <img src="${lastMsg.fromAvatar}" class="list-avatar">
+      <div class="list-info">
+        <div class="list-name">${lastMsg.fromName || userId}</div>
+        <div class="list-sub">${lastMsg.text}</div>
+      </div>
+    `;
+    div.onclick = () => openDmWindow(userId, lastMsg.fromName);
+    privateChatList.appendChild(div);
+  });
+}
+
+function openDmWindow(userId, name) {
+  activeDmTarget = userId;
+  privateChatList.style.display = 'none';
+  dmWindow.style.display = 'flex';
+  backToDmListBtn.style.display = 'block';
+  dmTitle.textContent = name;
+  messagesDm.innerHTML = '';
+  (dmConversations[userId] || []).forEach(appendDmMessage);
+}
+
+backToDmListBtn.onclick = () => {
+  activeDmTarget = null;
+  renderPrivateChatList();
+};
+
+function appendDmMessage(msg) {
+  const div = document.createElement('div');
+  div.className = `msg-item ${msg.from === socket.id ? 'me' : ''}`;
+  div.innerHTML = `
+    <img src="${msg.fromAvatar}" class="msg-avatar">
+    <div class="msg-content">
+      <span class="msg-name">${msg.fromName}</span>
+      <div class="msg-text">${msg.text}</div>
+    </div>
+  `;
+  messagesDm.appendChild(div);
+  messagesDm.scrollTop = messagesDm.scrollHeight;
+}
+
+dmForm.onsubmit = (e) => {
+  e.preventDefault();
+  const input = dmForm.querySelector('input');
+  const text = input.value.trim();
+  if (text && activeDmTarget) {
+    socket.emit('privateMessage', { to: activeDmTarget, text });
+    input.value = '';
+  }
+};
 
 // --- Voice UI ---
 function updateVoiceUI(users) {
@@ -271,12 +385,19 @@ confirmCreateRoomBtn.onclick = () => {
 
 // --- User Profile Modal ---
 function showUserProfile(userId) {
+  if (userId === socket.id) return switchTab('profile');
   const user = allUsersInRoom.find(u => u.id === userId);
   if (!user) return;
   modalUserAvatar.src = user.avatar;
   modalUserName.textContent = user.username;
   modalUserBio.textContent = user.bio;
   userProfileModal.style.display = 'flex';
+  
+  startPrivateChatBtn.onclick = () => {
+    userProfileModal.style.display = 'none';
+    switchTab('private');
+    openDmWindow(user.id, user.username);
+  };
 }
 closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
 
@@ -329,7 +450,7 @@ function initPeer() {
 }
 
 // --- Chat Form ---
-document.querySelector('.chat-input-form').onsubmit = (e) => {
+document.getElementById('main-chat-form').onsubmit = (e) => {
   e.preventDefault();
   const input = e.target.querySelector('input');
   const text = input.value.trim();

@@ -73,7 +73,14 @@ io.on('connection', (socket) => {
     }
     
     // セッション開始
-    const userData = { ...user, id: socket.id, room: 'General', isInVoice: false, isMuted: true, isSpeaking: false };
+    const userData = { 
+      ...user, 
+      id: socket.id, 
+      room: 'General', 
+      isInVoice: false, 
+      isMuted: true, 
+      isSpeaking: false 
+    };
     delete userData.password; // パスワードは送らない
     activeSessions.set(socket.id, userData);
     
@@ -131,7 +138,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // メッセージ
+  // チャットメッセージ
   socket.on('chatMessage', (msg) => {
     const user = activeSessions.get(socket.id);
     if (user) {
@@ -144,6 +151,26 @@ io.on('connection', (socket) => {
         id: socket.id,
         room: user.room
       });
+    }
+  });
+
+  // 個人チャット (DM)
+  socket.on('privateMessage', (data) => {
+    const { to, text } = data;
+    const fromUser = activeSessions.get(socket.id);
+    const toUser = activeSessions.get(to) || Array.from(activeSessions.values()).find(u => u.id === to);
+    
+    if (fromUser && toUser) {
+      const msg = {
+        from: socket.id,
+        fromUserId: fromUser.userId,
+        fromName: fromUser.username,
+        fromAvatar: fromUser.avatar,
+        text,
+        timestamp: new Date().toLocaleTimeString()
+      };
+      io.to(toUser.id).emit('privateMessage', msg);
+      socket.emit('privateMessageSent', { ...msg, to: toUser.id });
     }
   });
 
