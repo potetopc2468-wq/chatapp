@@ -53,6 +53,29 @@ function saveData() {
   fs.writeFileSync(ROOMS_FILE, JSON.stringify(persistentRooms, null, 2));
 }
 
+function hashSeed(seed) {
+  return String(seed).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+}
+
+function createPoopAvatar(seed) {
+  const hue = hashSeed(seed) % 360;
+  const fill = `hsl(${hue}, 70%, 55%)`;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+      <rect width="128" height="128" rx="32" fill="#fff7ed"/>
+      <path d="M64 18c9 0 16 7 16 16 0 2 0 4-1 6 16 5 27 18 27 34 0 20-19 36-42 36S22 94 22 74c0-16 11-29 27-34-1-2-1-4-1-6 0-9 7-16 16-16Z" fill="${fill}" stroke="#5b341c" stroke-width="6" stroke-linejoin="round"/>
+      <circle cx="50" cy="66" r="6" fill="#1f2937"/>
+      <circle cx="78" cy="66" r="6" fill="#1f2937"/>
+      <path d="M50 86c8 6 20 6 28 0" fill="none" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function isAlphanumeric(value) {
+  return /^[A-Za-z0-9]+$/.test(value);
+}
+
 const activeSessions = new Map(); // socket.id -> userData
 const roomUsers = new Map(); // roomName -> Set of socketIds
 const roomHistory = new Map(); // roomName -> Array of messages
@@ -78,13 +101,19 @@ io.on('connection', (socket) => {
 
   socket.on('signup', async (data) => {
     const { userId, password, username } = data;
+    if (!isAlphanumeric(userId)) {
+      return socket.emit('signupError', 'ユーザーIDは英数字のみ使えます');
+    }
+    if (!isAlphanumeric(password)) {
+      return socket.emit('signupError', 'パスワードは英数字のみ使えます');
+    }
     if (registeredUsers[userId]) return socket.emit('signupError', 'このユーザーIDは既に使用されています');
     const hashedPassword = await bcrypt.hash(password, 10);
     registeredUsers[userId] = {
       userId,
       password: hashedPassword,
       username: username || userId,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
+      avatar: createPoopAvatar(userId),
       bio: 'よろしくお願いします！'
     };
     saveData();
@@ -93,6 +122,9 @@ io.on('connection', (socket) => {
 
   socket.on('login', async (data) => {
     const { userId, password } = data;
+    if (!isAlphanumeric(userId) || !isAlphanumeric(password)) {
+      return socket.emit('loginError', 'ユーザーIDとパスワードは英数字のみ使えます');
+    }
     const user = registeredUsers[userId];
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return socket.emit('loginError', 'IDまたはパスワードが正しくありません');

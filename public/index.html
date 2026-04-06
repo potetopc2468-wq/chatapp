@@ -16,15 +16,15 @@
     <div class="auth-box">
       <h2 id="auth-title">ログイン</h2>
       <div id="login-form">
-        <input type="text" id="login-id" placeholder="ユーザーID" maxlength="15">
-        <input type="password" id="login-pw" placeholder="パスワード">
+        <input type="text" id="login-id" placeholder="ユーザーID（英数字のみ）" maxlength="15" pattern="[A-Za-z0-9]+">
+        <input type="password" id="login-pw" placeholder="パスワード（英数字のみ）" maxlength="30" pattern="[A-Za-z0-9]+">
         <button id="login-btn" class="primary-btn">ログイン</button>
         <p class="auth-switch">アカウントがない方は <a href="#" id="show-signup">新規登録</a></p>
       </div>
       <div id="signup-form" style="display: none;">
-        <input type="text" id="signup-id" placeholder="希望のユーザーID" maxlength="15">
+        <input type="text" id="signup-id" placeholder="希望のユーザーID（英数字のみ）" maxlength="15" pattern="[A-Za-z0-9]+">
         <input type="text" id="signup-name" placeholder="表示名 (ニックネーム)" maxlength="15">
-        <input type="password" id="signup-pw" placeholder="パスワード">
+        <input type="password" id="signup-pw" placeholder="パスワード（英数字のみ）" maxlength="30" pattern="[A-Za-z0-9]+">
         <button id="signup-btn" class="primary-btn">新規登録</button>
         <p class="auth-switch">既にアカウントがある方は <a href="#" id="show-login">ログイン</a></p>
       </div>

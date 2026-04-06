@@ -94,6 +94,35 @@ let allUsersInRoom = [];
 let dmConversations = JSON.parse(localStorage.getItem('chat_dms') || '{}');
 let activeDmTarget = null;
 let roomMessages = { 'General': [] };
+let audioContext = null;
+let analyserNode = null;
+let micSourceNode = null;
+let speakingAnimationId = null;
+let isSpeakingNow = false;
+let speakingHoldUntil = 0;
+
+function hashSeed(seed) {
+  return String(seed).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+}
+
+function createPoopAvatar(seed = Math.random().toString(36).slice(2)) {
+  const hue = hashSeed(seed) % 360;
+  const fill = `hsl(${hue}, 70%, 55%)`;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+      <rect width="128" height="128" rx="32" fill="#fff7ed"/>
+      <path d="M64 18c9 0 16 7 16 16 0 2 0 4-1 6 16 5 27 18 27 34 0 20-19 36-42 36S22 94 22 74c0-16 11-29 27-34-1-2-1-4-1-6 0-9 7-16 16-16Z" fill="${fill}" stroke="#5b341c" stroke-width="6" stroke-linejoin="round"/>
+      <circle cx="50" cy="66" r="6" fill="#1f2937"/>
+      <circle cx="78" cy="66" r="6" fill="#1f2937"/>
+      <path d="M50 86c8 6 20 6 28 0" fill="none" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function isAlphanumeric(value) {
+  return /^[A-Za-z0-9]+$/.test(value);
+}
 
 // --- Auth Logic ---
 showSignup.onclick = (e) => {
@@ -115,6 +144,8 @@ signupBtn.onclick = () => {
   const username = signupNameInput.value.trim();
   const password = signupPwInput.value;
   if (!userId || !password) return alert('IDとパスワードを入力してください');
+  if (!isAlphanumeric(userId)) return alert('ユーザーIDは英数字のみ使えます');
+  if (!isAlphanumeric(password)) return alert('パスワードは英数字のみ使えます');
   socket.emit('signup', { userId, password, username });
 };
 
@@ -122,6 +153,8 @@ loginBtn.onclick = () => {
   const userId = loginIdInput.value.trim();
   const password = loginPwInput.value;
   if (!userId || !password) return alert('IDとパスワードを入力してください');
+  if (!isAlphanumeric(userId)) return alert('ユーザーIDは英数字のみ使えます');
+  if (!isAlphanumeric(password)) return alert('パスワードは英数字のみ使えます');
   socket.emit('login', { userId, password });
 };
 
@@ -251,7 +284,7 @@ socket.on('roomList', (rooms) => {
     div.className = 'list-item';
     const isOwner = myUser && room.ownerId === myUser.userId;
     div.innerHTML = `
-      <img src="${room.ownerAvatar || 'https://api.dicebear.com/7.x/identicon/svg'}" class="list-avatar">
+      <img src="${room.ownerAvatar || createPoopAvatar(room.name)}" class="list-avatar">
       <div class="list-info">
         <div class="list-name">${room.name}</div>
         <div class="list-sub">${room.count} 人が参加中 ${isOwner ? '(作成者)' : ''}</div>
@@ -401,6 +434,84 @@ function updateVoiceUI(users) {
   });
 }
 
+function emitVoiceStatus(isMuted) {
+  const nextMuted = Boolean(isMuted);
+  if (nextMuted) {
+    isSpeakingNow = false;
+  }
+  socket.emit('voiceStatus', {
+    isInVoice: Boolean(localStream),
+    isMuted: nextMuted,
+    isSpeaking: isSpeakingNow && !nextMuted
+  });
+}
+
+function stopSpeakingDetection() {
+  if (speakingAnimationId) {
+    cancelAnimationFrame(speakingAnimationId);
+    speakingAnimationId = null;
+  }
+  if (micSourceNode) {
+    micSourceNode.disconnect();
+    micSourceNode = null;
+  }
+  if (analyserNode) {
+    analyserNode.disconnect();
+    analyserNode = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+  isSpeakingNow = false;
+  speakingHoldUntil = 0;
+}
+
+function startSpeakingDetection() {
+  stopSpeakingDetection();
+  if (!localStream) return;
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  audioContext = new AudioContextClass();
+  analyserNode = audioContext.createAnalyser();
+  analyserNode.fftSize = 512;
+  micSourceNode = audioContext.createMediaStreamSource(localStream);
+  micSourceNode.connect(analyserNode);
+
+  const samples = new Uint8Array(analyserNode.fftSize);
+
+  const detect = () => {
+    if (!analyserNode || !localStream) return;
+
+    const audioTrack = localStream.getAudioTracks()[0];
+    const isMuted = !audioTrack || !audioTrack.enabled;
+
+    analyserNode.getByteTimeDomainData(samples);
+    let squareSum = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const normalized = (samples[i] - 128) / 128;
+      squareSum += normalized * normalized;
+    }
+
+    const volume = Math.sqrt(squareSum / samples.length);
+    if (!isMuted && volume > 0.055) {
+      speakingHoldUntil = Date.now() + 220;
+    }
+
+    const nextSpeaking = !isMuted && Date.now() < speakingHoldUntil;
+    if (nextSpeaking !== isSpeakingNow) {
+      isSpeakingNow = nextSpeaking;
+      emitVoiceStatus(isMuted);
+    }
+
+    speakingAnimationId = requestAnimationFrame(detect);
+  };
+
+  detect();
+}
+
 // --- Voice Chat Logic ---
 function handleVoiceJoin(isMain) {
   return async () => {
@@ -411,13 +522,16 @@ function handleVoiceJoin(isMain) {
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         initPeer();
+        startSpeakingDetection();
         btn.classList.add('active');
         micBtn.style.display = 'block';
+        micBtn.classList.add('muted');
+        micBtn.innerHTML = '<i class="fas fa-microphone-slash"></i>';
         
         const checkPeerId = setInterval(() => {
           if (myPeerId) {
             clearInterval(checkPeerId);
-            socket.emit('voiceStatus', { isInVoice: true, isMuted: true, isSpeaking: false });
+            emitVoiceStatus(true);
           }
         }, 100);
       } catch (e) { alert('マイクを許可してください'); }
@@ -428,12 +542,15 @@ function handleVoiceJoin(isMain) {
 }
 
 function stopVoice(btn, micBtn) {
+  stopSpeakingDetection();
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
   }
   btn.classList.remove('active');
   micBtn.style.display = 'none';
+  micBtn.classList.add('muted');
+  micBtn.innerHTML = '<i class="fas fa-microphone-slash"></i>';
   socket.emit('voiceStatus', { isInVoice: false, isMuted: true, isSpeaking: false });
 }
 
@@ -445,7 +562,10 @@ function handleMicToggle(isMain) {
       audioTrack.enabled = !audioTrack.enabled;
       micBtn.classList.toggle('muted', !audioTrack.enabled);
       micBtn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
-      socket.emit('voiceStatus', { isInVoice: true, isMuted: !audioTrack.enabled, isSpeaking: false });
+      if (!audioTrack.enabled) {
+        isSpeakingNow = false;
+      }
+      emitVoiceStatus(!audioTrack.enabled);
     }
   };
 }
@@ -470,8 +590,7 @@ function initPeer() {
 
 // --- Profile Edit & Avatar Crop ---
 changeAvatarBtn.onclick = () => {
-  const seed = Math.random().toString(36).substring(7);
-  profileAvatarPreview.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
+  profileAvatarPreview.src = createPoopAvatar();
 };
 
 avatarUpload.onchange = (e) => {
