@@ -34,18 +34,17 @@
   <!-- メインコンテナ -->
   <div id="app" style="display: none;">
     <main id="main-content">
-      <!-- メインタブ (General/ルームチャット) -->
+      <!-- メインタブ (Generalチャット) -->
       <section id="tab-main" class="tab-panel active">
         <header>
           <div class="header-left">
-            <button id="back-to-lobby" class="icon-btn" title="ルーム退出" style="display: none;"><i class="fas fa-arrow-left"></i></button>
-            <h1 id="chat-title">メインチャット</h1>
+            <h1><i class="fas fa-globe"></i> メインチャット</h1>
           </div>
           <div class="header-voice-ui">
-            <div id="voice-participants"></div>
+            <div id="voice-participants-main"></div>
             <div class="voice-buttons">
-              <button id="join-voice-btn" class="voice-btn" title="ボイスチャットに参加"><i class="fas fa-phone"></i></button>
-              <button id="mic-toggle-btn" class="voice-btn muted" style="display: none;" title="ミュート"><i class="fas fa-microphone-slash"></i></button>
+              <button id="join-voice-btn-main" class="voice-btn" title="ボイスチャットに参加"><i class="fas fa-phone"></i></button>
+              <button id="mic-toggle-btn-main" class="voice-btn muted" style="display: none;" title="ミュート"><i class="fas fa-microphone-slash"></i></button>
             </div>
           </div>
         </header>
@@ -58,11 +57,31 @@
 
       <!-- グループタブ -->
       <section id="tab-group" class="tab-panel">
-        <header>
+        <header id="group-list-header">
           <h1><i class="fas fa-users"></i> グループ</h1>
           <button id="open-create-room" class="icon-btn"><i class="fas fa-plus"></i></button>
         </header>
+        <header id="group-chat-header" style="display: none;">
+          <div class="header-left">
+            <button id="back-to-group-list" class="icon-btn"><i class="fas fa-arrow-left"></i></button>
+            <h1 id="group-chat-title">グループ名</h1>
+          </div>
+          <div class="header-voice-ui">
+            <div id="voice-participants-group"></div>
+            <div class="voice-buttons">
+              <button id="join-voice-btn-group" class="voice-btn" title="ボイスチャットに参加"><i class="fas fa-phone"></i></button>
+              <button id="mic-toggle-btn-group" class="voice-btn muted" style="display: none;" title="ミュート"><i class="fas fa-microphone-slash"></i></button>
+            </div>
+          </div>
+        </header>
         <div id="group-list" class="list-area"></div>
+        <div id="group-chat-window" style="display: none; flex-direction: column; height: 100%;">
+          <div id="messages-group" class="message-area"></div>
+          <form class="chat-input-form" id="group-chat-form">
+            <input type="text" placeholder="メッセージを入力..." autocomplete="off">
+            <button type="submit"><i class="fas fa-paper-plane"></i></button>
+          </form>
+        </div>
       </section>
 
       <!-- 個人チャットタブ -->

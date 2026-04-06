@@ -21,10 +21,17 @@ const signupPwInput = document.getElementById('signup-pw');
 const appContainer = document.getElementById('app');
 const navItems = document.querySelectorAll('.nav-item');
 const tabPanels = document.querySelectorAll('.tab-panel');
-const chatTitle = document.getElementById('chat-title');
-const backToLobbyBtn = document.getElementById('back-to-lobby');
 const messagesMain = document.getElementById('messages-main');
 const groupList = document.getElementById('group-list');
+
+// Group UI
+const groupListHeader = document.getElementById('group-list-header');
+const groupChatHeader = document.getElementById('group-chat-header');
+const groupChatTitle = document.getElementById('group-chat-title');
+const groupChatWindow = document.getElementById('group-chat-window');
+const messagesGroup = document.getElementById('messages-group');
+const groupChatForm = document.getElementById('group-chat-form');
+const backToGroupListBtn = document.getElementById('back-to-group-list');
 
 // DM UI
 const privateChatList = document.getElementById('private-chat-list');
@@ -51,7 +58,7 @@ const confirmCropBtn = document.getElementById('confirm-crop');
 const cancelCropBtn = document.getElementById('cancel-crop');
 let cropper = null;
 
-// Room
+// Room Modal
 const createRoomModal = document.getElementById('create-room-modal');
 const openCreateRoomBtn = document.getElementById('open-create-room');
 const closeRoomModalBtn = document.getElementById('close-modal');
@@ -67,9 +74,13 @@ const modalUserName = document.getElementById('modal-user-name');
 const modalUserBio = document.getElementById('modal-user-bio');
 
 // Voice
-const voiceParticipants = document.getElementById('voice-participants');
-const joinVoiceBtn = document.getElementById('join-voice-btn');
-const micToggleBtn = document.getElementById('mic-toggle-btn');
+const voiceParticipantsMain = document.getElementById('voice-participants-main');
+const joinVoiceBtnMain = document.getElementById('join-voice-btn-main');
+const micToggleBtnMain = document.getElementById('mic-toggle-btn-main');
+
+const voiceParticipantsGroup = document.getElementById('voice-participants-group');
+const joinVoiceBtnGroup = document.getElementById('join-voice-btn-group');
+const micToggleBtnGroup = document.getElementById('mic-toggle-btn-group');
 
 // State
 let myUser = null;
@@ -82,6 +93,7 @@ let peers = {};
 let allUsersInRoom = [];
 let dmConversations = JSON.parse(localStorage.getItem('chat_dms') || '{}');
 let activeDmTarget = null;
+let roomMessages = { 'General': [] }; // { roomName: [messages] }
 
 // --- Auth Logic ---
 showSignup.onclick = (e) => {
@@ -165,12 +177,41 @@ function switchTab(tab) {
   currentTab = tab;
   navItems.forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
   tabPanels.forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
-  if (tab === 'group') socket.emit('getRooms');
+  if (tab === 'group') {
+    socket.emit('getRooms');
+    showGroupList();
+  }
   if (tab === 'private') renderPrivateChatList();
 }
 
-backToLobbyBtn.onclick = () => {
+function showGroupList() {
+  groupListHeader.style.display = 'flex';
+  groupChatHeader.style.display = 'none';
+  groupList.style.display = 'block';
+  groupChatWindow.style.display = 'none';
+}
+
+function openGroupChat(roomName) {
+  currentRoom = roomName;
+  groupChatTitle.textContent = roomName;
+  groupListHeader.style.display = 'none';
+  groupChatHeader.style.display = 'flex';
+  groupList.style.display = 'none';
+  groupChatWindow.style.display = 'flex';
+  
+  messagesGroup.innerHTML = '';
+  (roomMessages[roomName] || []).forEach(msg => appendMessage(messagesGroup, msg));
+  
+  socket.emit('join', { roomName });
+}
+
+backToGroupListBtn.onclick = () => {
+  const btn = currentTab === 'main' ? joinVoiceBtnMain : joinVoiceBtnGroup;
+  const micBtn = currentTab === 'main' ? micToggleBtnMain : micToggleBtnGroup;
+  stopVoice(btn, micBtn);
+  
   socket.emit('join', { roomName: 'General' });
+  showGroupList();
 };
 
 // --- Socket Events ---
@@ -179,13 +220,7 @@ socket.on('userList', (users) => {
   const me = users.find(u => u.id === socket.id);
   if (me) {
     myUser = { ...myUser, ...me };
-    if (me.room !== 'General') {
-      chatTitle.textContent = me.room;
-      backToLobbyBtn.style.display = 'block';
-    } else {
-      chatTitle.textContent = 'メインチャット';
-      backToLobbyBtn.style.display = 'none';
-    }
+    currentRoom = me.room;
   }
   updateVoiceUI(users);
 });
@@ -202,27 +237,21 @@ socket.on('roomList', (rooms) => {
         <div class="list-sub">${room.count} 人が参加中</div>
       </div>
     `;
-    div.onclick = () => {
-      socket.emit('join', { roomName: room.name });
-      switchTab('main');
-      messagesMain.innerHTML = '';
-    };
+    div.onclick = () => openGroupChat(room.name);
     groupList.appendChild(div);
   });
 });
 
 socket.on('message', (msg) => {
-  const div = document.createElement('div');
-  div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
-  div.innerHTML = `
-    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
-    <div class="msg-content">
-      <span class="msg-name">${msg.username}</span>
-      <div class="msg-text">${msg.text}</div>
-    </div>
-  `;
-  messagesMain.appendChild(div);
-  messagesMain.scrollTop = messagesMain.scrollHeight;
+  const room = msg.room || 'General';
+  if (!roomMessages[room]) roomMessages[room] = [];
+  roomMessages[room].push(msg);
+
+  if (room === 'General') {
+    appendMessage(messagesMain, msg);
+  } else if (room === currentRoom && currentTab === 'group') {
+    appendMessage(messagesGroup, msg);
+  }
 });
 
 // DM
@@ -316,12 +345,13 @@ dmForm.onsubmit = (e) => {
 
 // --- Voice UI ---
 function updateVoiceUI(users) {
-  voiceParticipants.innerHTML = '';
+  const participants = currentRoom === 'General' ? voiceParticipantsMain : voiceParticipantsGroup;
+  participants.innerHTML = '';
   users.filter(u => u.isInVoice).forEach(u => {
     const img = document.createElement('img');
     img.src = u.avatar;
     img.className = `voice-avatar ${u.isSpeaking ? 'speaking' : ''} ${u.isMuted ? 'muted' : ''}`;
-    voiceParticipants.appendChild(img);
+    participants.appendChild(img);
   });
 }
 
@@ -402,39 +432,58 @@ function showUserProfile(userId) {
 closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
 
 // --- Voice Chat Logic ---
-joinVoiceBtn.onclick = async () => {
-  if (!localStream) {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      initPeer();
-      joinVoiceBtn.classList.add('active');
-      micToggleBtn.style.display = 'block';
-      
-      const checkPeerId = setInterval(() => {
-        if (myPeerId) {
-          clearInterval(checkPeerId);
-          socket.emit('voiceStatus', { isInVoice: true, isMuted: true, isSpeaking: false });
-        }
-      }, 100);
-    } catch (e) { alert('マイクを許可してください'); }
-  } else {
+function handleVoiceJoin(isMain) {
+  return async () => {
+    const btn = isMain ? joinVoiceBtnMain : joinVoiceBtnGroup;
+    const micBtn = isMain ? micToggleBtnMain : micToggleBtnGroup;
+    
+    if (!localStream) {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        initPeer();
+        btn.classList.add('active');
+        micBtn.style.display = 'block';
+        
+        const checkPeerId = setInterval(() => {
+          if (myPeerId) {
+            clearInterval(checkPeerId);
+            socket.emit('voiceStatus', { isInVoice: true, isMuted: true, isSpeaking: false });
+          }
+        }, 100);
+      } catch (e) { alert('マイクを許可してください'); }
+    } else {
+      stopVoice(btn, micBtn);
+    }
+  };
+}
+
+function stopVoice(btn, micBtn) {
+  if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
-    joinVoiceBtn.classList.remove('active');
-    micToggleBtn.style.display = 'none';
-    socket.emit('voiceStatus', { isInVoice: false, isMuted: true, isSpeaking: false });
   }
-};
+  btn.classList.remove('active');
+  micBtn.style.display = 'none';
+  socket.emit('voiceStatus', { isInVoice: false, isMuted: true, isSpeaking: false });
+}
 
-micToggleBtn.onclick = () => {
-  if (localStream) {
-    const audioTrack = localStream.getAudioTracks()[0];
-    audioTrack.enabled = !audioTrack.enabled;
-    micToggleBtn.classList.toggle('muted', !audioTrack.enabled);
-    micToggleBtn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
-    socket.emit('voiceStatus', { isInVoice: true, isMuted: !audioTrack.enabled, isSpeaking: false });
-  }
-};
+function handleMicToggle(isMain) {
+  return () => {
+    const micBtn = isMain ? micToggleBtnMain : micToggleBtnGroup;
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      audioTrack.enabled = !audioTrack.enabled;
+      micBtn.classList.toggle('muted', !audioTrack.enabled);
+      micBtn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+      socket.emit('voiceStatus', { isInVoice: true, isMuted: !audioTrack.enabled, isSpeaking: false });
+    }
+  };
+}
+
+joinVoiceBtnMain.onclick = handleVoiceJoin(true);
+micToggleBtnMain.onclick = handleMicToggle(true);
+joinVoiceBtnGroup.onclick = handleVoiceJoin(false);
+micToggleBtnGroup.onclick = handleMicToggle(false);
 
 function initPeer() {
   peer = new Peer(undefined, { host: '0.peerjs.com', secure: true });
@@ -451,6 +500,16 @@ function initPeer() {
 
 // --- Chat Form ---
 document.getElementById('main-chat-form').onsubmit = (e) => {
+  e.preventDefault();
+  const input = e.target.querySelector('input');
+  const text = input.value.trim();
+  if (text) {
+    socket.emit('chatMessage', text);
+    input.value = '';
+  }
+};
+
+document.getElementById('group-chat-form').onsubmit = (e) => {
   e.preventDefault();
   const input = e.target.querySelector('input');
   const text = input.value.trim();
