@@ -93,7 +93,7 @@ let peers = {};
 let allUsersInRoom = [];
 let dmConversations = JSON.parse(localStorage.getItem('chat_dms') || '{}');
 let activeDmTarget = null;
-let roomMessages = { 'General': [] }; // { roomName: [messages] }
+let roomMessages = { 'General': [] };
 
 // --- Auth Logic ---
 showSignup.onclick = (e) => {
@@ -138,17 +138,16 @@ socket.on('loginSuccess', (userData) => {
   authScreen.style.display = 'none';
   appContainer.style.display = 'flex';
   updateProfileUI();
-  // ログイン情報を保存
   localStorage.setItem('chat_user_id', userData.userId);
   localStorage.setItem('chat_user_pw', loginPwInput.value || signupPwInput.value);
 });
 
-// 自動ログインの試行
+// 自動ログイン
 window.onload = () => {
   const savedId = localStorage.getItem('chat_user_id');
   const savedPw = localStorage.getItem('chat_user_pw');
   if (savedId && savedPw) {
-    socket.emit('login', { userId: savedId, password: savedPw });
+    socket.emit('autoLogin', { userId: savedId, password: savedPw });
   }
 };
 
@@ -230,24 +229,32 @@ socket.on('roomList', (rooms) => {
   rooms.forEach(room => {
     const div = document.createElement('div');
     div.className = 'list-item';
+    const isOwner = myUser && room.ownerId === myUser.userId;
     div.innerHTML = `
       <img src="${room.ownerAvatar || 'https://api.dicebear.com/7.x/identicon/svg'}" class="list-avatar">
       <div class="list-info">
         <div class="list-name">${room.name}</div>
-        <div class="list-sub">${room.count} 人が参加中</div>
+        <div class="list-sub">${room.count} 人が参加中 ${isOwner ? '(作成者)' : ''}</div>
       </div>
+      ${isOwner ? `<button class="delete-room-btn" onclick="event.stopPropagation(); deleteRoom('${room.name}')"><i class="fas fa-trash"></i></button>` : ''}
     `;
     div.onclick = () => openGroupChat(room.name);
     groupList.appendChild(div);
   });
 });
 
+window.deleteRoom = (roomName) => {
+  if (confirm(`ルーム「${roomName}」を削除しますか？`)) {
+    socket.emit('deleteRoom', roomName);
+  }
+};
+
 socket.on('message', (msg) => {
   const room = msg.room || 'General';
   if (!roomMessages[room]) roomMessages[room] = [];
   roomMessages[room].push(msg);
 
-  if (room === 'General') {
+  if (room === 'General' && currentTab === 'main') {
     appendMessage(messagesMain, msg);
   } else if (room === currentRoom && currentTab === 'group') {
     appendMessage(messagesGroup, msg);
@@ -263,7 +270,7 @@ socket.on('privateMessage', (msg) => {
   if (activeDmTarget === otherId) {
     appendDmMessage(msg);
   }
-  renderPrivateChatList();
+  if (currentTab === 'private' && !activeDmTarget) renderPrivateChatList();
 });
 
 socket.on('privateMessageSent', (msg) => {
@@ -281,6 +288,20 @@ function saveDMs() {
 }
 
 // --- UI Rendering ---
+function appendMessage(container, msg) {
+  const div = document.createElement('div');
+  div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
+  div.innerHTML = `
+    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
+    <div class="msg-content">
+      <span class="msg-name">${msg.username}</span>
+      <div class="msg-text">${msg.text}</div>
+    </div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
 function renderPrivateChatList() {
   privateChatList.innerHTML = '';
   privateChatList.style.display = 'block';
@@ -289,7 +310,8 @@ function renderPrivateChatList() {
   dmTitle.textContent = '個人チャット';
 
   Object.keys(dmConversations).forEach(userId => {
-    const lastMsg = dmConversations[userId][dmConversations[userId].length - 1];
+    const chat = dmConversations[userId];
+    const lastMsg = chat[chat.length - 1];
     const div = document.createElement('div');
     div.className = 'list-item';
     div.innerHTML = `
@@ -333,19 +355,10 @@ function appendDmMessage(msg) {
   messagesDm.scrollTop = messagesDm.scrollHeight;
 }
 
-dmForm.onsubmit = (e) => {
-  e.preventDefault();
-  const input = dmForm.querySelector('input');
-  const text = input.value.trim();
-  if (text && activeDmTarget) {
-    socket.emit('privateMessage', { to: activeDmTarget, text });
-    input.value = '';
-  }
-};
-
 // --- Voice UI ---
 function updateVoiceUI(users) {
   const participants = currentRoom === 'General' ? voiceParticipantsMain : voiceParticipantsGroup;
+  if (!participants) return;
   participants.innerHTML = '';
   users.filter(u => u.isInVoice).forEach(u => {
     const img = document.createElement('img');
@@ -354,82 +367,6 @@ function updateVoiceUI(users) {
     participants.appendChild(img);
   });
 }
-
-// --- Profile Edit & Avatar Crop ---
-changeAvatarBtn.onclick = () => {
-  const seed = Math.random().toString(36).substring(7);
-  profileAvatarPreview.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
-};
-
-avatarUpload.onchange = (e) => {
-  const file = e.target.files[0];
-  if (file) {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      cropImage.src = event.target.result;
-      cropModal.style.display = 'flex';
-      if (cropper) cropper.destroy();
-      cropper = new Cropper(cropImage, {
-        aspectRatio: 1,
-        viewMode: 1,
-      });
-    };
-    reader.readAsDataURL(file);
-  }
-};
-
-cancelCropBtn.onclick = () => {
-  cropModal.style.display = 'none';
-  if (cropper) cropper.destroy();
-};
-
-confirmCropBtn.onclick = () => {
-  const canvas = cropper.getCroppedCanvas({ width: 200, height: 200 });
-  profileAvatarPreview.src = canvas.toDataURL();
-  cropModal.style.display = 'none';
-  cropper.destroy();
-};
-
-saveProfileBtn.onclick = () => {
-  const data = {
-    username: profileNameInput.value.trim(),
-    bio: profileBioInput.value.trim(),
-    avatar: profileAvatarPreview.src
-  };
-  socket.emit('updateProfile', data);
-  alert('プロフィールを保存しました');
-};
-
-// --- Room Creation ---
-openCreateRoomBtn.onclick = () => createRoomModal.style.display = 'flex';
-closeRoomModalBtn.onclick = () => createRoomModal.style.display = 'none';
-confirmCreateRoomBtn.onclick = () => {
-  const name = newRoomNameInput.value.trim();
-  if (name) {
-    socket.emit('join', { roomName: name });
-    createRoomModal.style.display = 'none';
-    switchTab('main');
-    messagesMain.innerHTML = '';
-  }
-};
-
-// --- User Profile Modal ---
-function showUserProfile(userId) {
-  if (userId === socket.id) return switchTab('profile');
-  const user = allUsersInRoom.find(u => u.id === userId);
-  if (!user) return;
-  modalUserAvatar.src = user.avatar;
-  modalUserName.textContent = user.username;
-  modalUserBio.textContent = user.bio;
-  userProfileModal.style.display = 'flex';
-  
-  startPrivateChatBtn.onclick = () => {
-    userProfileModal.style.display = 'none';
-    switchTab('private');
-    openDmWindow(user.id, user.username);
-  };
-}
-closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
 
 // --- Voice Chat Logic ---
 function handleVoiceJoin(isMain) {
@@ -498,7 +435,82 @@ function initPeer() {
   });
 }
 
-// --- Chat Form ---
+// --- Profile Edit & Avatar Crop ---
+changeAvatarBtn.onclick = () => {
+  const seed = Math.random().toString(36).substring(7);
+  profileAvatarPreview.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
+};
+
+avatarUpload.onchange = (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      cropImage.src = event.target.result;
+      cropModal.style.display = 'flex';
+      if (cropper) cropper.destroy();
+      cropper = new Cropper(cropImage, {
+        aspectRatio: 1,
+        viewMode: 1,
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+};
+
+cancelCropBtn.onclick = () => {
+  cropModal.style.display = 'none';
+  if (cropper) cropper.destroy();
+};
+
+confirmCropBtn.onclick = () => {
+  const canvas = cropper.getCroppedCanvas({ width: 200, height: 200 });
+  profileAvatarPreview.src = canvas.toDataURL();
+  cropModal.style.display = 'none';
+  cropper.destroy();
+};
+
+saveProfileBtn.onclick = () => {
+  const data = {
+    username: profileNameInput.value.trim(),
+    bio: profileBioInput.value.trim(),
+    avatar: profileAvatarPreview.src
+  };
+  socket.emit('updateProfile', data);
+  alert('プロフィールを保存しました');
+};
+
+// --- Room Creation ---
+openCreateRoomBtn.onclick = () => createRoomModal.style.display = 'flex';
+closeRoomModalBtn.onclick = () => createRoomModal.style.display = 'none';
+confirmCreateRoomBtn.onclick = () => {
+  const name = newRoomNameInput.value.trim();
+  if (name) {
+    socket.emit('createRoom', name);
+    createRoomModal.style.display = 'none';
+    openGroupChat(name);
+  }
+};
+
+// --- User Profile Modal ---
+function showUserProfile(userId) {
+  if (userId === socket.id) return switchTab('profile');
+  const user = allUsersInRoom.find(u => u.id === userId);
+  if (!user) return;
+  modalUserAvatar.src = user.avatar;
+  modalUserName.textContent = user.username;
+  modalUserBio.textContent = user.bio;
+  userProfileModal.style.display = 'flex';
+  
+  startPrivateChatBtn.onclick = () => {
+    userProfileModal.style.display = 'none';
+    switchTab('private');
+    openDmWindow(user.id, user.username);
+  };
+}
+closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
+
+// --- Chat Forms ---
 document.getElementById('main-chat-form').onsubmit = (e) => {
   e.preventDefault();
   const input = e.target.querySelector('input');
@@ -515,6 +527,16 @@ document.getElementById('group-chat-form').onsubmit = (e) => {
   const text = input.value.trim();
   if (text) {
     socket.emit('chatMessage', text);
+    input.value = '';
+  }
+};
+
+dmForm.onsubmit = (e) => {
+  e.preventDefault();
+  const input = dmForm.querySelector('input');
+  const text = input.value.trim();
+  if (text && activeDmTarget) {
+    socket.emit('privateMessage', { to: activeDmTarget, text });
     input.value = '';
   }
 };
