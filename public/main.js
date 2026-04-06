@@ -139,7 +139,11 @@ socket.on('loginSuccess', (userData) => {
   appContainer.style.display = 'flex';
   updateProfileUI();
   localStorage.setItem('chat_user_id', userData.userId);
-  localStorage.setItem('chat_user_pw', loginPwInput.value || signupPwInput.value);
+  // 入力がある場合のみ（手動ログイン/新規登録時のみ）パスワードを保存
+  const pw = loginPwInput.value || signupPwInput.value;
+  if (pw) {
+    localStorage.setItem('chat_user_pw', pw);
+  }
 });
 
 // 自動ログイン
@@ -176,11 +180,25 @@ function switchTab(tab) {
   currentTab = tab;
   navItems.forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
   tabPanels.forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
-  if (tab === 'group') {
+  
+  if (tab === 'main') {
+    currentRoom = 'General';
+    socket.emit('join', { roomName: 'General' });
+    // ボイスチャット停止（タブを跨ぐとボイチャが混線するため、明示的に止める）
+    const btn = joinVoiceBtnMain;
+    const micBtn = micToggleBtnMain;
+    stopVoice(btn, micBtn);
+  } else if (tab === 'group') {
     socket.emit('getRooms');
     showGroupList();
+    // メインのボイチャを止める
+    stopVoice(joinVoiceBtnMain, micToggleBtnMain);
+  } else if (tab === 'private') {
+    renderPrivateChatList();
+    // 全てのボイチャを止める
+    stopVoice(joinVoiceBtnMain, micToggleBtnMain);
+    stopVoice(joinVoiceBtnGroup, micToggleBtnGroup);
   }
-  if (tab === 'private') renderPrivateChatList();
 }
 
 function showGroupList() {
@@ -199,7 +217,8 @@ function openGroupChat(roomName) {
   groupChatWindow.style.display = 'flex';
   
   messagesGroup.innerHTML = '';
-  (roomMessages[roomName] || []).forEach(msg => appendMessage(messagesGroup, msg));
+  // 履歴はsocket.on('history')で届くので、ここではクリアするだけで良い
+  // (roomMessages[roomName] || []).forEach(msg => appendMessage(messagesGroup, msg));
   
   socket.emit('join', { roomName });
 }
@@ -209,6 +228,7 @@ backToGroupListBtn.onclick = () => {
   const micBtn = currentTab === 'main' ? micToggleBtnMain : micToggleBtnGroup;
   stopVoice(btn, micBtn);
   
+  currentRoom = 'General';
   socket.emit('join', { roomName: 'General' });
   showGroupList();
 };
@@ -248,6 +268,19 @@ window.deleteRoom = (roomName) => {
     socket.emit('deleteRoom', roomName);
   }
 };
+
+socket.on('history', (history) => {
+  const room = history.length > 0 ? history[0].room : currentRoom;
+  roomMessages[room] = history;
+  
+  if (room === 'General' && currentTab === 'main') {
+    messagesMain.innerHTML = '';
+    history.forEach(msg => appendMessage(messagesMain, msg));
+  } else if (room === currentRoom && currentTab === 'group') {
+    messagesGroup.innerHTML = '';
+    history.forEach(msg => appendMessage(messagesGroup, msg));
+  }
+});
 
 socket.on('message', (msg) => {
   const room = msg.room || 'General';

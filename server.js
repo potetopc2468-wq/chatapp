@@ -22,6 +22,12 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+app.use(express.static(PUBLIC_DIR));
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
@@ -49,6 +55,14 @@ function saveData() {
 
 const activeSessions = new Map(); // socket.id -> userData
 const roomUsers = new Map(); // roomName -> Set of socketIds
+const roomHistory = new Map(); // roomName -> Array of messages
+
+function addHistory(roomName, msg) {
+  if (!roomHistory.has(roomName)) roomHistory.set(roomName, []);
+  const history = roomHistory.get(roomName);
+  history.push(msg);
+  if (history.length > 50) history.shift();
+}
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
@@ -167,6 +181,13 @@ io.on('connection', (socket) => {
 
     updateRoomUserList(roomName);
     sendRoomList();
+
+    // 履歴を送る
+    if (roomHistory.has(roomName)) {
+      socket.emit('history', roomHistory.get(roomName));
+    } else {
+      socket.emit('history', []);
+    }
   }
 
   function updateRoomUserList(roomName) {
@@ -188,7 +209,7 @@ io.on('connection', (socket) => {
   socket.on('chatMessage', (msg) => {
     const user = activeSessions.get(socket.id);
     if (user) {
-      io.to(user.room).emit('message', {
+      const chatMsg = {
         type: 'user',
         username: user.username,
         avatar: user.avatar,
@@ -196,7 +217,9 @@ io.on('connection', (socket) => {
         timestamp: new Date().toLocaleTimeString(),
         id: socket.id,
         room: user.room
-      });
+      };
+      addHistory(user.room, chatMsg);
+      io.to(user.room).emit('message', chatMsg);
     }
   });
 
