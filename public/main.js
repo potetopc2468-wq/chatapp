@@ -23,6 +23,8 @@ const navItems = document.querySelectorAll('.nav-item');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const messagesMain = document.getElementById('messages-main');
 const groupList = document.getElementById('group-list');
+const mainChatForm = document.getElementById('main-chat-form');
+const mainImageInput = document.getElementById('main-image-input');
 
 // Group UI
 const groupListHeader = document.getElementById('group-list-header');
@@ -31,6 +33,7 @@ const groupChatTitle = document.getElementById('group-chat-title');
 const groupChatWindow = document.getElementById('group-chat-window');
 const messagesGroup = document.getElementById('messages-group');
 const groupChatForm = document.getElementById('group-chat-form');
+const groupImageInput = document.getElementById('group-image-input');
 const backToGroupListBtn = document.getElementById('back-to-group-list');
 
 // DM UI
@@ -38,8 +41,18 @@ const privateChatList = document.getElementById('private-chat-list');
 const dmWindow = document.getElementById('dm-window');
 const messagesDm = document.getElementById('messages-dm');
 const dmForm = document.getElementById('dm-form');
+const dmImageInput = document.getElementById('dm-image-input');
 const dmTitle = document.getElementById('dm-title');
 const backToDmListBtn = document.getElementById('back-to-dm-list');
+
+// Edit Message Modal
+const editMessageModal = document.getElementById('edit-message-modal');
+const editMessageText = document.getElementById('edit-message-text');
+const editMessageImage = document.getElementById('edit-message-image');
+const editMessagePreview = document.getElementById('edit-message-preview');
+const saveEditMessageBtn = document.getElementById('save-edit-message');
+const cancelEditMessageBtn = document.getElementById('cancel-edit-message');
+const removeEditImageBtn = document.getElementById('remove-edit-image');
 
 // Profile
 const profileIdDisplay = document.getElementById('profile-id-display');
@@ -77,10 +90,12 @@ const modalUserBio = document.getElementById('modal-user-bio');
 const voiceParticipantsMain = document.getElementById('voice-participants-main');
 const joinVoiceBtnMain = document.getElementById('join-voice-btn-main');
 const micToggleBtnMain = document.getElementById('mic-toggle-btn-main');
+const voiceMeterMain = document.getElementById('voice-meter-main');
 
 const voiceParticipantsGroup = document.getElementById('voice-participants-group');
 const joinVoiceBtnGroup = document.getElementById('join-voice-btn-group');
 const micToggleBtnGroup = document.getElementById('mic-toggle-btn-group');
+const voiceMeterGroup = document.getElementById('voice-meter-group');
 
 // State
 let myUser = null;
@@ -100,6 +115,16 @@ let micSourceNode = null;
 let speakingAnimationId = null;
 let isSpeakingNow = false;
 let speakingHoldUntil = 0;
+const MAX_CHAT_IMAGE_BYTES = 3 * 1024 * 1024;
+let editImageData = '';
+let editImageRemoved = false;
+let editingMessageContext = null;
+
+const pendingImages = {
+  main: '',
+  group: '',
+  dm: ''
+};
 
 function hashSeed(seed) {
   return String(seed).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
@@ -123,6 +148,218 @@ function createPoopAvatar(seed = Math.random().toString(36).slice(2)) {
 function isAlphanumeric(value) {
   return /^[A-Za-z0-9]+$/.test(value);
 }
+
+function getPendingKeyFromForm(form) {
+  if (form === mainChatForm) return 'main';
+  if (form === groupChatForm) return 'group';
+  return 'dm';
+}
+
+function updateAttachButtonState(form, hasImage) {
+  const btn = form.querySelector('.attach-btn');
+  if (btn) btn.classList.toggle('has-image', hasImage);
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function bindImageInput(form, inputEl) {
+  inputEl.addEventListener('change', async (event) => {
+    const key = getPendingKeyFromForm(form);
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('画像ファイルのみ送信できます');
+      inputEl.value = '';
+      return;
+    }
+    if (file.size > MAX_CHAT_IMAGE_BYTES) {
+      alert('画像サイズは3MB以下にしてください');
+      inputEl.value = '';
+      return;
+    }
+
+    try {
+      pendingImages[key] = await fileToDataUrl(file);
+      updateAttachButtonState(form, true);
+    } catch (_err) {
+      alert('画像の読み込みに失敗しました');
+    }
+  });
+}
+
+function clearPendingImage(form, inputEl) {
+  const key = getPendingKeyFromForm(form);
+  pendingImages[key] = '';
+  inputEl.value = '';
+  updateAttachButtonState(form, false);
+}
+
+function createMessagePayload(form) {
+  const key = getPendingKeyFromForm(form);
+  const input = form.querySelector('input[type="text"]');
+  const text = input.value.trim();
+  const image = pendingImages[key];
+  return { text, image };
+}
+
+function getMessagePreviewText(msg) {
+  if (msg.deleted) return '削除されました';
+  if (msg.text) return msg.text;
+  if (msg.image) return '画像を送信しました';
+  return '';
+}
+
+function createMessageMeta(msg) {
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+
+  if (msg.edited && !msg.deleted) {
+    const edited = document.createElement('span');
+    edited.className = 'msg-edited-badge';
+    edited.textContent = '編集済み';
+    meta.appendChild(edited);
+  }
+
+  return meta.childNodes.length ? meta : null;
+}
+
+function canManageMessage(msg, scope) {
+  if (!msg || msg.deleted) return false;
+  if (scope === 'room') return msg.id === socket.id && Boolean(msg.messageId);
+  return msg.from === socket.id && Boolean(msg.messageId);
+}
+
+function openEditMessageModal(scope, msg, targetId) {
+  editingMessageContext = { scope, messageId: msg.messageId, targetId, roomName: msg.room || currentRoom };
+  editImageData = '';
+  editImageRemoved = false;
+  editMessageText.value = msg.text || '';
+  editMessagePreview.src = msg.image || '';
+  editMessagePreview.style.display = msg.image ? 'block' : 'none';
+  editMessageImage.value = '';
+  editMessageModal.style.display = 'flex';
+}
+
+function closeEditMessageModal() {
+  editMessageModal.style.display = 'none';
+  editingMessageContext = null;
+  editImageData = '';
+  editImageRemoved = false;
+  editMessageImage.value = '';
+}
+
+async function handleEditImageSelection(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    alert('画像ファイルのみ送信できます');
+    editMessageImage.value = '';
+    return;
+  }
+  if (file.size > MAX_CHAT_IMAGE_BYTES) {
+    alert('画像サイズは3MB以下にしてください');
+    editMessageImage.value = '';
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    editImageData = String(reader.result || '');
+    editImageRemoved = false;
+    editMessagePreview.src = editImageData;
+    editMessagePreview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function getNextEditImagePayload() {
+  if (editImageRemoved) {
+    return { removeImage: true, image: '' };
+  }
+  if (editImageData) {
+    return { removeImage: false, image: editImageData };
+  }
+  return { removeImage: false, image: undefined };
+}
+
+function updateRoomMessage(roomName, nextMsg) {
+  const list = roomMessages[roomName] || [];
+  const index = list.findIndex(msg => msg.messageId === nextMsg.messageId);
+  if (index !== -1) {
+    list[index] = { ...list[index], ...nextMsg };
+  }
+}
+
+function updateDmMessage(otherId, nextMsg) {
+  const list = dmConversations[otherId] || [];
+  const index = list.findIndex(msg => msg.messageId === nextMsg.messageId);
+  if (index !== -1) {
+    list[index] = { ...list[index], ...nextMsg };
+  }
+}
+
+function renderRoomThread(roomName, container) {
+  container.innerHTML = '';
+  (roomMessages[roomName] || []).forEach(msg => appendMessage(container, msg));
+}
+
+function renderDmThread(otherId) {
+  messagesDm.innerHTML = '';
+  (dmConversations[otherId] || []).forEach(msg => appendDmMessage(msg));
+}
+
+editMessageImage.onchange = handleEditImageSelection;
+removeEditImageBtn.onclick = () => {
+  editImageRemoved = true;
+  editImageData = '';
+  editMessageImage.value = '';
+  editMessagePreview.src = '';
+  editMessagePreview.style.display = 'none';
+};
+
+cancelEditMessageBtn.onclick = () => {
+  closeEditMessageModal();
+};
+
+saveEditMessageBtn.onclick = () => {
+  if (!editingMessageContext) return;
+
+  const text = editMessageText.value.trim();
+  const imagePayload = getNextEditImagePayload();
+  if (!text && !imagePayload.image && !imagePayload.removeImage) {
+    alert('本文か画像を入力してください');
+    return;
+  }
+
+  const basePayload = {
+    messageId: editingMessageContext.messageId,
+    text,
+    image: imagePayload.image,
+    removeImage: imagePayload.removeImage
+  };
+
+  if (editingMessageContext.scope === 'room') {
+    socket.emit('editChatMessage', {
+      ...basePayload,
+      roomName: editingMessageContext.roomName
+    });
+  } else {
+    socket.emit('editPrivateMessage', {
+      ...basePayload,
+      to: editingMessageContext.targetId
+    });
+  }
+
+  closeEditMessageModal();
+};
 
 // --- Auth Logic ---
 showSignup.onclick = (e) => {
@@ -287,7 +524,7 @@ socket.on('roomList', (rooms) => {
       <img src="${room.ownerAvatar || createPoopAvatar(room.name)}" class="list-avatar">
       <div class="list-info">
         <div class="list-name">${room.name}</div>
-        <div class="list-sub">${room.count} 人が参加中 ${isOwner ? '(作成者)' : ''}</div>
+        <div class="list-sub">${room.count} 人が参加中 ・ ${room.messageCount || 0} 件のコメント ${isOwner ? '(作成者)' : ''}</div>
       </div>
       ${isOwner ? `<button class="delete-room-btn" onclick="event.stopPropagation(); deleteRoom('${room.name}')"><i class="fas fa-trash"></i></button>` : ''}
     `;
@@ -307,11 +544,9 @@ socket.on('history', (history) => {
   roomMessages[room] = history;
   
   if (room === 'General' && currentTab === 'main') {
-    messagesMain.innerHTML = '';
-    history.forEach(msg => appendMessage(messagesMain, msg));
+    renderRoomThread(room, messagesMain);
   } else if (room === currentRoom && currentTab === 'group') {
-    messagesGroup.innerHTML = '';
-    history.forEach(msg => appendMessage(messagesGroup, msg));
+    renderRoomThread(room, messagesGroup);
   }
 });
 
@@ -324,6 +559,26 @@ socket.on('message', (msg) => {
     appendMessage(messagesMain, msg);
   } else if (room === currentRoom && currentTab === 'group') {
     appendMessage(messagesGroup, msg);
+  }
+});
+
+socket.on('messageUpdated', (msg) => {
+  const room = msg.room || 'General';
+  updateRoomMessage(room, msg);
+  if (room === 'General' && currentTab === 'main') {
+    renderRoomThread(room, messagesMain);
+  } else if (room === currentRoom && currentTab === 'group') {
+    renderRoomThread(room, messagesGroup);
+  }
+});
+
+socket.on('messageDeleted', (msg) => {
+  const room = msg.room || 'General';
+  updateRoomMessage(room, msg);
+  if (room === 'General' && currentTab === 'main') {
+    renderRoomThread(room, messagesMain);
+  } else if (room === currentRoom && currentTab === 'group') {
+    renderRoomThread(room, messagesGroup);
   }
 });
 
@@ -349,6 +604,24 @@ socket.on('privateMessageSent', (msg) => {
   }
 });
 
+socket.on('privateMessageUpdated', (msg) => {
+  const otherId = msg.from === socket.id ? msg.to : msg.from;
+  updateDmMessage(otherId, msg);
+  if (activeDmTarget === otherId) {
+    renderDmThread(otherId);
+  }
+  if (currentTab === 'private' && !activeDmTarget) renderPrivateChatList();
+});
+
+socket.on('privateMessageDeleted', (msg) => {
+  const otherId = msg.from === socket.id ? msg.to : msg.from;
+  updateDmMessage(otherId, msg);
+  if (activeDmTarget === otherId) {
+    renderDmThread(otherId);
+  }
+  if (currentTab === 'private' && !activeDmTarget) renderPrivateChatList();
+});
+
 function saveDMs() {
   localStorage.setItem('chat_dms', JSON.stringify(dmConversations));
 }
@@ -357,13 +630,70 @@ function saveDMs() {
 function appendMessage(container, msg) {
   const div = document.createElement('div');
   div.className = `msg-item ${msg.id === socket.id ? 'me' : ''}`;
-  div.innerHTML = `
-    <img src="${msg.avatar}" class="msg-avatar" onclick="showUserProfile('${msg.id}')">
-    <div class="msg-content">
-      <span class="msg-name">${msg.username}</span>
-      <div class="msg-text">${msg.text}</div>
-    </div>
-  `;
+
+  const avatar = document.createElement('img');
+  avatar.src = msg.avatar;
+  avatar.className = 'msg-avatar';
+  avatar.addEventListener('click', () => showUserProfile(msg.id));
+
+  const content = document.createElement('div');
+  content.className = 'msg-content';
+
+  const name = document.createElement('span');
+  name.className = 'msg-name';
+  name.textContent = msg.username;
+
+  content.appendChild(name);
+
+  if (msg.deleted) {
+    const deleted = document.createElement('div');
+    deleted.className = 'msg-text deleted';
+    deleted.textContent = '削除されました';
+    content.appendChild(deleted);
+  } else {
+    if (msg.text) {
+      const text = document.createElement('div');
+      text.className = 'msg-text';
+      text.textContent = msg.text;
+      content.appendChild(text);
+    }
+
+    if (msg.image) {
+      const image = document.createElement('img');
+      image.src = msg.image;
+      image.className = 'msg-image';
+      image.alt = 'chat image';
+      image.addEventListener('click', () => window.open(msg.image, '_blank', 'noopener,noreferrer'));
+      content.appendChild(image);
+    }
+
+    const meta = createMessageMeta(msg);
+    if (meta) content.appendChild(meta);
+  }
+
+  if (canManageMessage(msg, 'room')) {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'msg-action-btn';
+    editBtn.textContent = '編集';
+    editBtn.onclick = () => openEditMessageModal('room', msg);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'msg-action-btn';
+    deleteBtn.textContent = '削除';
+    deleteBtn.onclick = () => socket.emit('deleteChatMessage', { roomName: msg.room || 'General', messageId: msg.messageId });
+
+    actions.appendChild(editBtn);
+    actions.appendChild(deleteBtn);
+    content.appendChild(actions);
+  }
+
+  div.appendChild(avatar);
+  div.appendChild(content);
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -377,6 +707,7 @@ function renderPrivateChatList() {
 
   Object.keys(dmConversations).forEach(userId => {
     const chat = dmConversations[userId];
+    if (!chat.length) return;
     const lastMsg = chat[chat.length - 1];
     const div = document.createElement('div');
     div.className = 'list-item';
@@ -384,7 +715,7 @@ function renderPrivateChatList() {
       <img src="${lastMsg.fromAvatar}" class="list-avatar">
       <div class="list-info">
         <div class="list-name">${lastMsg.fromName || userId}</div>
-        <div class="list-sub">${lastMsg.text}</div>
+        <div class="list-sub">${getMessagePreviewText(lastMsg)}</div>
       </div>
     `;
     div.onclick = () => openDmWindow(userId, lastMsg.fromName);
@@ -398,8 +729,7 @@ function openDmWindow(userId, name) {
   dmWindow.style.display = 'flex';
   backToDmListBtn.style.display = 'block';
   dmTitle.textContent = name;
-  messagesDm.innerHTML = '';
-  (dmConversations[userId] || []).forEach(appendDmMessage);
+  renderDmThread(userId);
 }
 
 backToDmListBtn.onclick = () => {
@@ -410,13 +740,68 @@ backToDmListBtn.onclick = () => {
 function appendDmMessage(msg) {
   const div = document.createElement('div');
   div.className = `msg-item ${msg.from === socket.id ? 'me' : ''}`;
-  div.innerHTML = `
-    <img src="${msg.fromAvatar}" class="msg-avatar">
-    <div class="msg-content">
-      <span class="msg-name">${msg.fromName}</span>
-      <div class="msg-text">${msg.text}</div>
-    </div>
-  `;
+
+  const avatar = document.createElement('img');
+  avatar.src = msg.fromAvatar;
+  avatar.className = 'msg-avatar';
+
+  const content = document.createElement('div');
+  content.className = 'msg-content';
+
+  const name = document.createElement('span');
+  name.className = 'msg-name';
+  name.textContent = msg.fromName;
+  content.appendChild(name);
+
+  if (msg.deleted) {
+    const deleted = document.createElement('div');
+    deleted.className = 'msg-text deleted';
+    deleted.textContent = '削除されました';
+    content.appendChild(deleted);
+  } else {
+    if (msg.text) {
+      const text = document.createElement('div');
+      text.className = 'msg-text';
+      text.textContent = msg.text;
+      content.appendChild(text);
+    }
+
+    if (msg.image) {
+      const image = document.createElement('img');
+      image.src = msg.image;
+      image.className = 'msg-image';
+      image.alt = 'dm image';
+      image.addEventListener('click', () => window.open(msg.image, '_blank', 'noopener,noreferrer'));
+      content.appendChild(image);
+    }
+
+    const meta = createMessageMeta(msg);
+    if (meta) content.appendChild(meta);
+  }
+
+  if (canManageMessage(msg, 'dm')) {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'msg-action-btn';
+    editBtn.textContent = '編集';
+    editBtn.onclick = () => openEditMessageModal('dm', msg, msg.from === socket.id ? msg.to : msg.from);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'msg-action-btn';
+    deleteBtn.textContent = '削除';
+    deleteBtn.onclick = () => socket.emit('deletePrivateMessage', { to: msg.from === socket.id ? msg.to : msg.from, messageId: msg.messageId });
+
+    actions.appendChild(editBtn);
+    actions.appendChild(deleteBtn);
+    content.appendChild(actions);
+  }
+
+  div.appendChild(avatar);
+  div.appendChild(content);
   messagesDm.appendChild(div);
   messagesDm.scrollTop = messagesDm.scrollHeight;
 }
@@ -434,11 +819,25 @@ function updateVoiceUI(users) {
   });
 }
 
+function updateVoiceMeters(level = 0, isMuted = true, isInVoice = false) {
+  [voiceMeterMain, voiceMeterGroup].forEach((meter) => {
+    if (!meter) return;
+    const fill = meter.querySelector('.voice-meter-fill');
+    if (!fill) return;
+
+    const normalizedLevel = Math.max(0, Math.min(1, level));
+    fill.style.transform = `scaleX(${isInVoice && !isMuted ? normalizedLevel : 0.02})`;
+    meter.classList.toggle('active', isInVoice && !isMuted && normalizedLevel > 0.05);
+    meter.classList.toggle('muted', !isInVoice || isMuted);
+  });
+}
+
 function emitVoiceStatus(isMuted) {
   const nextMuted = Boolean(isMuted);
   if (nextMuted) {
     isSpeakingNow = false;
   }
+  updateVoiceMeters(0, nextMuted, Boolean(localStream));
   socket.emit('voiceStatus', {
     isInVoice: Boolean(localStream),
     isMuted: nextMuted,
@@ -465,6 +864,7 @@ function stopSpeakingDetection() {
   }
   isSpeakingNow = false;
   speakingHoldUntil = 0;
+  updateVoiceMeters(0, true, false);
 }
 
 function startSpeakingDetection() {
@@ -496,6 +896,8 @@ function startSpeakingDetection() {
     }
 
     const volume = Math.sqrt(squareSum / samples.length);
+    const meterLevel = Math.min(1, volume * 12);
+    updateVoiceMeters(meterLevel, isMuted, true);
     if (!isMuted && volume > 0.055) {
       speakingHoldUntil = Date.now() + 220;
     }
@@ -663,32 +1065,33 @@ function showUserProfile(userId) {
 closeProfileModalBtn.onclick = () => userProfileModal.style.display = 'none';
 
 // --- Chat Forms ---
-document.getElementById('main-chat-form').onsubmit = (e) => {
+mainChatForm.onsubmit = (e) => {
   e.preventDefault();
-  const input = e.target.querySelector('input');
-  const text = input.value.trim();
-  if (text) {
-    socket.emit('chatMessage', text);
-    input.value = '';
-  }
+  const payload = createMessagePayload(mainChatForm);
+  if (!payload.text && !payload.image) return;
+  socket.emit('chatMessage', payload);
+  mainChatForm.querySelector('input[type="text"]').value = '';
+  clearPendingImage(mainChatForm, mainImageInput);
 };
 
-document.getElementById('group-chat-form').onsubmit = (e) => {
+groupChatForm.onsubmit = (e) => {
   e.preventDefault();
-  const input = e.target.querySelector('input');
-  const text = input.value.trim();
-  if (text) {
-    socket.emit('chatMessage', text);
-    input.value = '';
-  }
+  const payload = createMessagePayload(groupChatForm);
+  if (!payload.text && !payload.image) return;
+  socket.emit('chatMessage', payload);
+  groupChatForm.querySelector('input[type="text"]').value = '';
+  clearPendingImage(groupChatForm, groupImageInput);
 };
 
 dmForm.onsubmit = (e) => {
   e.preventDefault();
-  const input = dmForm.querySelector('input');
-  const text = input.value.trim();
-  if (text && activeDmTarget) {
-    socket.emit('privateMessage', { to: activeDmTarget, text });
-    input.value = '';
-  }
+  const payload = createMessagePayload(dmForm);
+  if ((!payload.text && !payload.image) || !activeDmTarget) return;
+  socket.emit('privateMessage', { to: activeDmTarget, text: payload.text, image: payload.image });
+  dmForm.querySelector('input[type="text"]').value = '';
+  clearPendingImage(dmForm, dmImageInput);
 };
+
+bindImageInput(mainChatForm, mainImageInput);
+bindImageInput(groupChatForm, groupImageInput);
+bindImageInput(dmForm, dmImageInput);

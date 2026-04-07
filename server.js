@@ -79,6 +79,29 @@ function isAlphanumeric(value) {
 const activeSessions = new Map(); // socket.id -> userData
 const roomUsers = new Map(); // roomName -> Set of socketIds
 const roomHistory = new Map(); // roomName -> Array of messages
+const dmHistory = new Map(); // conversationKey -> Array of messages
+
+function createMessageId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getDmKey(a, b) {
+  return [a, b].sort().join('::');
+}
+
+function findRoomMessage(roomName, messageId) {
+  const history = roomHistory.get(roomName) || [];
+  const index = history.findIndex(msg => msg.messageId === messageId);
+  if (index === -1) return null;
+  return { history, index, message: history[index] };
+}
+
+function findDmMessage(conversationKey, messageId) {
+  const history = dmHistory.get(conversationKey) || [];
+  const index = history.findIndex(msg => msg.messageId === messageId);
+  if (index === -1) return null;
+  return { history, index, message: history[index] };
+}
 
 function addHistory(roomName, msg) {
   if (!roomHistory.has(roomName)) roomHistory.set(roomName, []);
@@ -233,19 +256,62 @@ io.on('connection', (socket) => {
       name,
       ownerId: persistentRooms[name].ownerId,
       ownerAvatar: persistentRooms[name].ownerAvatar,
-      count: roomUsers.has(name) ? roomUsers.get(name).size : 0
+      count: roomUsers.has(name) ? roomUsers.get(name).size : 0,
+      messageCount: roomHistory.has(name) ? roomHistory.get(name).length : 0
     }));
     target.emit('roomList', list);
   }
 
-  socket.on('chatMessage', (msg) => {
+  function normalizeMessagePayload(payload) {
+    if (typeof payload === 'string') {
+      return { text: payload.trim(), image: '' };
+    }
+    const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+    const image = typeof payload?.image === 'string' ? payload.image : '';
+
+    if (image && !image.startsWith('data:image/')) {
+      return { text, image: '' };
+    }
+
+    // Socket.IO maxHttpBufferSize is 10MB. Keep image payloads much smaller for stability.
+    if (image && image.length > 3_000_000) {
+      return { text, image: '' };
+    }
+
+    return { text, image };
+  }
+
+  function normalizeEditPayload(payload) {
+    const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+    const removeImage = Boolean(payload?.removeImage);
+    const image = typeof payload?.image === 'string' ? payload.image : undefined;
+
+    if (image && !image.startsWith('data:image/')) {
+      return { text, image: undefined, removeImage };
+    }
+
+    if (image && image.length > 3_000_000) {
+      return { text, image: undefined, removeImage };
+    }
+
+    return { text, image, removeImage };
+  }
+
+  socket.on('chatMessage', (payload) => {
     const user = activeSessions.get(socket.id);
     if (user) {
+      const { text, image } = normalizeMessagePayload(payload);
+      if (!text && !image) return;
+
       const chatMsg = {
+        messageId: createMessageId(),
         type: 'user',
         username: user.username,
         avatar: user.avatar,
-        text: msg,
+        text,
+        image,
+        edited: false,
+        deleted: false,
         timestamp: new Date().toLocaleTimeString(),
         id: socket.id,
         room: user.room
@@ -253,6 +319,133 @@ io.on('connection', (socket) => {
       addHistory(user.room, chatMsg);
       io.to(user.room).emit('message', chatMsg);
     }
+  });
+
+  socket.on('editChatMessage', (payload) => {
+    const user = activeSessions.get(socket.id);
+    if (!user) return;
+
+    const messageId = payload?.messageId;
+    if (!messageId) return;
+
+    const roomName = typeof payload?.roomName === 'string' ? payload.roomName : user.room;
+    const found = findRoomMessage(roomName, messageId);
+    if (!found || found.message.id !== socket.id || found.message.deleted) return;
+
+    const { text, image, removeImage } = normalizeEditPayload(payload);
+    const nextText = typeof text === 'string' ? text : found.message.text;
+    const nextImage = removeImage ? '' : (typeof image === 'string' ? image : found.message.image);
+
+    if (!nextText && !nextImage) return;
+
+    found.message.text = nextText;
+    found.message.image = nextImage;
+    found.message.edited = true;
+
+    io.to(roomName).emit('messageUpdated', found.message);
+  });
+
+  socket.on('deleteChatMessage', (payload) => {
+    const user = activeSessions.get(socket.id);
+    if (!user) return;
+
+    const messageId = payload?.messageId;
+    if (!messageId) return;
+
+    const roomName = typeof payload?.roomName === 'string' ? payload.roomName : user.room;
+    const found = findRoomMessage(roomName, messageId);
+    if (!found || found.message.id !== socket.id || found.message.deleted) return;
+
+    found.message.text = '';
+    found.message.image = '';
+    found.message.deleted = true;
+    found.message.edited = false;
+
+    io.to(roomName).emit('messageDeleted', found.message);
+  });
+
+  socket.on('privateMessage', (payload) => {
+    const fromUser = activeSessions.get(socket.id);
+    if (!fromUser) return;
+
+    const toSocketId = payload?.to;
+    if (!toSocketId || typeof toSocketId !== 'string') return;
+
+    const toUser = activeSessions.get(toSocketId);
+    if (!toUser) return;
+
+    const { text, image } = normalizeMessagePayload(payload);
+    if (!text && !image) return;
+
+    const messageId = createMessageId();
+    const conversationKey = getDmKey(socket.id, toSocketId);
+
+    const dmMsg = {
+      messageId,
+      from: socket.id,
+      to: toSocketId,
+      fromName: fromUser.username,
+      fromAvatar: fromUser.avatar,
+      text,
+      image,
+      edited: false,
+      deleted: false,
+      timestamp: new Date().toLocaleTimeString()
+    };
+
+    if (!dmHistory.has(conversationKey)) dmHistory.set(conversationKey, []);
+    dmHistory.get(conversationKey).push(dmMsg);
+    if (dmHistory.get(conversationKey).length > 100) dmHistory.get(conversationKey).shift();
+
+    io.to(toSocketId).emit('privateMessage', dmMsg);
+    socket.emit('privateMessageSent', dmMsg);
+  });
+
+  socket.on('editPrivateMessage', (payload) => {
+    const fromUser = activeSessions.get(socket.id);
+    if (!fromUser) return;
+
+    const toSocketId = payload?.to;
+    const messageId = payload?.messageId;
+    if (!toSocketId || !messageId) return;
+
+    const conversationKey = getDmKey(socket.id, toSocketId);
+    const found = findDmMessage(conversationKey, messageId);
+    if (!found || found.message.from !== socket.id || found.message.deleted) return;
+
+    const { text, image, removeImage } = normalizeEditPayload(payload);
+    const nextText = typeof text === 'string' ? text : found.message.text;
+    const nextImage = removeImage ? '' : (typeof image === 'string' ? image : found.message.image);
+
+    if (!nextText && !nextImage) return;
+
+    found.message.text = nextText;
+    found.message.image = nextImage;
+    found.message.edited = true;
+
+    io.to(socket.id).emit('privateMessageUpdated', found.message);
+    io.to(toSocketId).emit('privateMessageUpdated', found.message);
+  });
+
+  socket.on('deletePrivateMessage', (payload) => {
+    const fromUser = activeSessions.get(socket.id);
+    if (!fromUser) return;
+
+    const toSocketId = payload?.to;
+    const messageId = payload?.messageId;
+    if (!toSocketId || !messageId) return;
+
+    const conversationKey = getDmKey(socket.id, toSocketId);
+    const found = findDmMessage(conversationKey, messageId);
+    if (!found || found.message.from !== socket.id || found.message.deleted) return;
+
+    found.message.text = '';
+    found.message.image = '';
+    found.message.deleted = true;
+    found.message.edited = false;
+
+    io.to(socket.id).emit('privateMessageDeleted', found.message);
+    io.to(toSocketId).emit('privateMessageDeleted', found.message);
   });
 
   socket.on('voiceStatus', (data) => {
